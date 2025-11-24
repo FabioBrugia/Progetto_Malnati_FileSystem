@@ -1,7 +1,16 @@
-use anyhow::Result;
 use fuser::{
-    FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
-    ReplyWrite, Request,
+    Filesystem,
+    FileAttr,
+    FileType,
+    ReplyAttr,
+    ReplyData,
+    ReplyDirectory,
+    ReplyEntry,
+    ReplyEmpty,
+    ReplyWrite,
+    ReplyCreate,
+    Request,
+    MountOption,
 };
 use libc::ENOENT;
 use std::collections::HashMap;
@@ -15,7 +24,6 @@ const TTL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 struct INode {
-    #[allow(dead_code)]
     ino: u64,
     path: String,
     attr: FileAttr,
@@ -140,7 +148,7 @@ impl RemoteFS {
         Some(path)
     }
 
-    pub fn mount(self, mountpoint: &str) -> Result<()> {
+    pub fn mount(self, mountpoint: &str) -> anyhow::Result<()> {
         let options = vec![
             MountOption::RW,
             MountOption::FSName("remotefs".to_string()),
@@ -153,7 +161,7 @@ impl RemoteFS {
 }
 
 impl Filesystem for RemoteFS {
-    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         log::debug!("lookup(parent={}, name={:?})", parent, name);
 
         let path = match self.path_from_parent_and_name(parent, name) {
@@ -210,7 +218,7 @@ impl Filesystem for RemoteFS {
         }
     }
 
-    fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
         log::debug!("getattr(ino={})", ino);
 
         match self.get_inode(ino) {
@@ -221,7 +229,7 @@ impl Filesystem for RemoteFS {
 
     fn readdir(
         &mut self,
-        _req: &Request,
+        _req: &Request<'_>,
         ino: u64,
         _fh: u64,
         offset: i64,
@@ -288,13 +296,13 @@ impl Filesystem for RemoteFS {
 
     fn read(
         &mut self,
-        _req: &Request,
+        _req: &Request<'_>,
         ino: u64,
         _fh: u64,
         offset: i64,
         size: u32,
         _flags: i32,
-        _lock: Option<u64>,
+        _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
         log::debug!("read(ino={}, offset={}, size={})", ino, offset, size);
@@ -327,9 +335,9 @@ impl Filesystem for RemoteFS {
 
     fn write(
         &mut self,
-        _req: &Request,
+        _req: &Request<'_>,
         ino: u64,
-        fh: u64,
+        _fh: u64,
         offset: i64,
         data: &[u8],
         _write_flags: u32,
@@ -337,7 +345,7 @@ impl Filesystem for RemoteFS {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        log::debug!("write(ino={}, fh={}, offset={}, size={})", ino, fh, offset, data.len());
+        log::debug!("write(ino={}, offset={}, size={})", ino, offset, data.len());
 
         let inode = match self.get_inode(ino) {
             Some(inode) => inode,
@@ -382,7 +390,7 @@ impl Filesystem for RemoteFS {
 
     fn mkdir(
         &mut self,
-        _req: &Request,
+        _req: &Request<'_>,
         parent: u64,
         name: &OsStr,
         _mode: u32,
@@ -424,7 +432,7 @@ impl Filesystem for RemoteFS {
         }
     }
 
-    fn unlink(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         log::debug!("unlink(parent={}, name={:?})", parent, name);
 
         let path = match self.path_from_parent_and_name(parent, name) {
@@ -454,7 +462,7 @@ impl Filesystem for RemoteFS {
         }
     }
 
-    fn rmdir(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         log::debug!("rmdir(parent={}, name={:?})", parent, name);
 
         let path = match self.path_from_parent_and_name(parent, name) {
@@ -486,13 +494,13 @@ impl Filesystem for RemoteFS {
 
     fn rename(
         &mut self,
-        _req: &Request,
+        _req: &Request<'_>,
         parent: u64,
         name: &OsStr,
         newparent: u64,
         newname: &OsStr,
         _flags: u32,
-        reply: fuser::ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
         log::debug!(
             "rename(parent={}, name={:?}, newparent={}, newname={:?})",
@@ -545,7 +553,7 @@ impl Filesystem for RemoteFS {
         _mode: u32,
         _umask: u32,
         _flags: i32,
-        reply: fuser::ReplyCreate,
+        reply: ReplyCreate,
     ) {
         log::debug!("create(parent={}, name={:?})", parent, name);
 
@@ -587,4 +595,3 @@ impl Filesystem for RemoteFS {
         }
     }
 }
-
