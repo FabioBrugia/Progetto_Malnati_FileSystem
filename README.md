@@ -1,4 +1,4 @@
-# Remote File System in Rust
+# Remote File System (Rust)
 
 Un filesystem remoto implementato in Rust che presenta un mount point locale, rispecchiando la struttura di un file system ospitato su un server remoto.
 
@@ -7,14 +7,18 @@ Un filesystem remoto implementato in Rust che presenta un mount point locale, ri
 - ✅ Interfaccia filesystem locale che interagisce con storage remoto
 - ✅ Operazioni standard sui file (lettura, scrittura, creazione, eliminazione, rinomina)
 - ✅ Supporto completo per Linux usando FUSE
-- ✅ Server RESTful implementato in Python/Flask
+- ✅ Server RESTful implementato in Rust/Actix Web
 - ✅ Client FUSE implementato in Rust
 
 ## Prerequisiti
 
-### Per il server Python:
+### Per il server Rust:
 ```bash
-python3 -pip
+# Toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# (Opzionale) aggiorna
+rustup update
 ```
 
 ### Per il client Rust:
@@ -33,9 +37,9 @@ sudo apt-get install build-essential     # Debian/Ubuntu
 
 ## Installazione
 
-### 1. Installare le dipendenze Python per il server:
+### 1. Compilare il server Rust:
 ```bash
-pip install -r requirements.txt
+cargo build --bin server
 ```
 
 ### 2. Compilare il client Rust:
@@ -48,10 +52,10 @@ cargo build --release
 
 ### 1. Avviare il server:
 ```bash
-python3 test_server.py
+cargo run --bin server
 ```
 
-Il server partirà sulla porta 8080 e creerà una directory `server_storage` per i file remoti.
+Il server parte su `http://0.0.0.0:9000` e utilizza `/tmp/remote_fs_test` come storage locale (creato automaticamente).
 
 ### 2. Creare un mount point e avviare il client:
 ```bash
@@ -93,8 +97,8 @@ Il server espone le seguenti API RESTful:
 ```
 ┌─────────────┐          ┌──────────────┐          ┌─────────────┐
 │   Sistema   │  FUSE    │ Client Rust  │   HTTP   │   Server    │
-│ Operativo   │ ◄──────► │   (FUSE)     │ ◄──────► │   Python    │
-│             │          │              │          │   (Flask)   │
+│ Operativo   │ ◄──────► │   (FUSE)     │ ◄──────► │   Rust/Actix│
+│             │          │              │          │             │
 └─────────────┘          └──────────────┘          └─────────────┘
                                                            │
                                                            ▼
@@ -124,7 +128,8 @@ Il server espone le seguenti API RESTful:
 ├── README.md
 ├── specifiche.md
 ├── requirements.txt
-├── test_server.py          # Server Python/Flask
+├── src/server/             # Server Rust (Actix)
+├── clientFS/
 └── clientFS/
     ├── Cargo.toml
     └── src/
@@ -136,7 +141,7 @@ Il server espone le seguenti API RESTful:
 ### Test:
 ```bash
 # Avviare il server in un terminale
-python3 test_server.py
+cargo run --bin server
 
 # Avviare il client in un altro terminale
 cd clientFS
@@ -156,7 +161,7 @@ cat file.txt
 - Verificare che Rust sia aggiornato: `rustup update`
 
 ### Il client non si monta:
-- Verificare che il server sia in esecuzione: `curl http://localhost:8080/health`
+- Verificare che il server sia in esecuzione: `curl http://localhost:9000/health`
 - Verificare che FUSE sia disponibile: `fusermount3 --version`
 - Verificare i permessi sulla directory di mount
 - Provare con `sudo` se necessario
