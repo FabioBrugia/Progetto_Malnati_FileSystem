@@ -15,7 +15,7 @@ async fn main() -> std::io::Result<()> {
     // Base dir fissa; host/port fissi
     let base_dir = "/tmp/remote_fs_test".to_string();
 
-    println!("Avvio server Remote File System su http://0.0.0.0:9000 (base_dir: {})", base_dir);
+    println!("Avvio server Remote File System su http://0.0.0.0:8080 (base_dir: {})", base_dir);
 
     // Crea la directory base se non esiste
     fs::create_dir_all(&base_dir).unwrap();
@@ -38,7 +38,7 @@ async fn main() -> std::io::Result<()> {
             .route("/rename", web::post().to(handlers::rename_entry))
             .route("/health", web::get().to(handlers::health))
     })
-    .bind("0.0.0.0:9000")?
+    .bind("0.0.0.0:8080")?
     .run()
     .await
 }
