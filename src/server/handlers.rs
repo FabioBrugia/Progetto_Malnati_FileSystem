@@ -9,6 +9,8 @@ use tokio_util::io::ReaderStream;
 use tokio::io::AsyncWriteExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::os::unix::fs::PermissionsExt;
+use std::io::SeekFrom;
+use std::fs::OpenOptions;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -88,6 +90,7 @@ pub async fn index() -> Result<HttpResponse> {
             "GET /list/{path}",
             "GET /files/{path}",
             "PUT /files/{path}",
+            "PATCH /files/{path}",
             "POST /mkdir/{path}",
             "DELETE /files/{path}",
             "HEAD /files/{path}"
@@ -219,6 +222,83 @@ pub async fn write_file(
         }
         Err(_) => Ok(HttpResponse::InternalServerError().json("Failed to write file")),
     }
+}
+
+// PATCH /files/{path} - Scrittura parziale (Content-Range: bytes start-end/*)
+pub async fn patch_file(
+    req: HttpRequest,
+    data: web::Data<AppState>,
+    mut payload: web::Payload
+) -> Result<HttpResponse> {
+    let path = req.match_info().query("path");
+    let full_path = match get_safe_path(&data.base_dir, path) {
+        Some(p) => p,
+        None => return Ok(HttpResponse::BadRequest().json("Invalid path")),
+    };
+
+    // Recupera header Content-Range
+    let range_header = match req.headers().get("Content-Range") {
+        Some(h) => h.to_str().unwrap_or(""),
+        None => return Ok(HttpResponse::BadRequest().json("Missing Content-Range header")),
+    };
+
+    // Aspettato formato: bytes start-end/*
+    if !range_header.starts_with("bytes ") {
+        return Ok(HttpResponse::BadRequest().json("Invalid Content-Range format"));
+    }
+
+    let range_part = &range_header[6..]; // dopo 'bytes '
+    let parts: Vec<&str> = range_part.split('/').collect();
+    if parts.is_empty() {
+        return Ok(HttpResponse::BadRequest().json("Invalid Content-Range parts"));
+    }
+    let span = parts[0]; // start-end
+    let se: Vec<&str> = span.split('-').collect();
+    if se.len() != 2 {
+        return Ok(HttpResponse::BadRequest().json("Invalid start-end"));
+    }
+    let start = match se[0].parse::<u64>() { Ok(v) => v, Err(_) => return Ok(HttpResponse::BadRequest().json("Invalid start")) };
+    let end = match se[1].parse::<u64>() { Ok(v) => v, Err(_) => return Ok(HttpResponse::BadRequest().json("Invalid end")) };
+    if end < start {
+        return Ok(HttpResponse::BadRequest().json("End < start"));
+    }
+
+    // Crea directory parent se necessario
+    if let Some(parent) = full_path.parent() {
+        if let Err(_) = fs::create_dir_all(parent) {
+            return Ok(HttpResponse::InternalServerError().json("Failed to create parent directories"));
+        }
+    }
+
+    // Apri/crea file in RW
+    let mut file = match OpenOptions::new().read(true).write(true).create(true).open(&full_path) {
+        Ok(f) => f,
+        Err(_) => return Ok(HttpResponse::InternalServerError().json("Failed to open file")),
+    };
+
+    // Se end supera dimensione attuale, estende il file (creerà buchi se il FS lo supporta)
+    let current_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if end + 1 > current_len {
+        if let Err(_) = file.set_len(end + 1) { // end è inclusivo
+            return Ok(HttpResponse::InternalServerError().json("Failed to extend file"));
+        }
+    }
+
+    // Posiziona al punto di inizio
+    if let Err(_) = file.seek(SeekFrom::Start(start)) {
+        return Ok(HttpResponse::InternalServerError().json("Failed to seek"));
+    }
+
+    let mut total: usize = 0;
+    while let Some(chunk) = payload.next().await {
+        let bytes = chunk.map_err(actix_web::error::ErrorBadRequest)?;
+        if let Err(_) = std::io::Write::write_all(&mut file, &bytes) {
+            return Ok(HttpResponse::InternalServerError().json("Failed to write chunk"));
+        }
+        total += bytes.len();
+    }
+
+    Ok(HttpResponse::Ok().json(ApiResponse { success: true, message: None, bytes_written: Some(total) }))
 }
 
 // HEAD /files/{path} - Info file

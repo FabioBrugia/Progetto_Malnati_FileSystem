@@ -13,7 +13,7 @@ async fn main() -> std::io::Result<()> {
     env_logger::init();
 
     // Base dir fissa; host/port fissi
-    let base_dir = "/tmp/remote_fs_test".to_string();
+    let base_dir = "server_storage".to_string();
 
     println!("Avvio server Remote File System su http://0.0.0.0:8080 (base_dir: {})", base_dir);
 
@@ -32,6 +32,7 @@ async fn main() -> std::io::Result<()> {
             .route("/list/{path:.*}", web::get().to(handlers::list_directory))
             .route("/files/{path:.*}", web::get().to(handlers::read_file))
             .route("/files/{path:.*}", web::put().to(handlers::write_file))
+            .route("/files/{path:.*}", web::patch().to(handlers::patch_file))
             .route("/files/{path:.*}", web::head().to(handlers::file_info))
             .route("/mkdir/{path:.*}", web::post().to(handlers::create_directory))
             .route("/files/{path:.*}", web::delete().to(handlers::delete_file))
