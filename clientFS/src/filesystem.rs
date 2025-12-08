@@ -167,7 +167,7 @@ impl RemoteFS {
     }
 
     /// Get data from cache or fetch from server using range requests
-    fn read_with_cache(&self, path: &str, offset: u64, size: u32) -> anyhow::Result<Vec<u8>> {
+    fn read_with_cache(&self, path: &str, offset: u64, size: u32) -> Result<Vec<u8>, crate::api_client::ApiError> {
         let chunk_start = (offset / CHUNK_SIZE as u64) * CHUNK_SIZE as u64;
         let chunk_key = chunk_start;
 
@@ -307,7 +307,7 @@ impl Filesystem for RemoteFS {
             }
             Err(e) => {
                 log::error!("Failed to list directory: {}", e);
-                reply.error(ENOENT);
+                reply.error(e.errno);
             }
         }
     }
@@ -375,7 +375,7 @@ impl Filesystem for RemoteFS {
                     }
                     Err(e) => {
                         log::error!("Failed to truncate file: {}", e);
-                        reply.error(libc::EIO);
+                        reply.error(e.errno);
                         return;
                     }
                 }
@@ -460,7 +460,7 @@ impl Filesystem for RemoteFS {
             }
             Err(e) => {
                 log::error!("Failed to list directory: {}", e);
-                reply.error(libc::EIO);
+                reply.error(e.errno);
             }
         }
     }
@@ -541,7 +541,7 @@ impl Filesystem for RemoteFS {
             }
             Err(e) => {
                 log::error!("Failed to read file: {}", e);
-                reply.error(libc::EIO);
+                reply.error(e.errno);
             }
         }
     }
@@ -586,7 +586,7 @@ impl Filesystem for RemoteFS {
             }
             Err(e) => {
                 log::error!("Failed to write file chunk: {}", e);
-                reply.error(libc::EIO);
+                reply.error(e.errno);
             }
         }
     }
@@ -630,7 +630,7 @@ impl Filesystem for RemoteFS {
             }
             Err(e) => {
                 log::error!("Failed to create directory: {}", e);
-                reply.error(libc::EIO);
+                reply.error(e.errno);
             }
         }
     }
@@ -660,7 +660,7 @@ impl Filesystem for RemoteFS {
             }
             Err(e) => {
                 log::error!("Failed to delete file: {}", e);
-                reply.error(libc::EIO);
+                reply.error(e.errno);
             }
         }
     }
@@ -690,7 +690,7 @@ impl Filesystem for RemoteFS {
             }
             Err(e) => {
                 log::error!("Failed to delete directory: {}", e);
-                reply.error(libc::EIO);
+                reply.error(e.errno);
             }
         }
     }
@@ -743,7 +743,7 @@ impl Filesystem for RemoteFS {
             }
             Err(e) => {
                 log::error!("Failed to rename: {}", e);
-                reply.error(libc::EIO);
+                reply.error(e.errno);
             }
         }
     }
@@ -793,7 +793,7 @@ impl Filesystem for RemoteFS {
             }
             Err(e) => {
                 log::error!("Failed to create file: {}", e);
-                reply.error(libc::EIO);
+                reply.error(e.errno);
             }
         }
     }

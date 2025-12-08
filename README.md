@@ -9,6 +9,9 @@ Un filesystem remoto implementato in Rust che presenta un mount point locale, ri
 - ✅ Supporto completo per Linux usando FUSE
 - ✅ Server RESTful implementato in Rust/Actix Web
 - ✅ Client FUSE implementato in Rust
+- ✅ **Mapping fine degli errori HTTP → POSIX** per messaggi di errore chiari e comportamento corretto
+- ✅ Cache intelligente per operazioni di lettura/scrittura ottimizzate
+- ✅ Logging dettagliato con livelli di debug configurabili
 
 ## Prerequisiti
 
@@ -119,6 +122,38 @@ Il server espone le seguenti API RESTful:
 - ✅ Rinomina/spostamento
 - ✅ Listing directory
 - ✅ Attributi file (dimensione, timestamp, permessi)
+
+## Gestione Errori HTTP → POSIX
+
+Il client implementa un mapping fine degli errori HTTP ai codici di errore POSIX per un comportamento più robusto e messaggi di errore chiari:
+
+| HTTP Status | Errno POSIX | Significato |
+|-------------|-------------|-------------|
+| 400 | `EINVAL` | Parametri non validi |
+| 401, 403 | `EACCES` | Permesso negato |
+| **404** | **`ENOENT`** | **File o directory non trovata** |
+| 405 | `ENOSYS` | Operazione non supportata |
+| 409 | `EEXIST` | Risorsa già esistente |
+| 413 | `EFBIG` | File troppo grande |
+| **500** | **`EIO`** | **Errore I/O del server** |
+| 503 | `EAGAIN` | Servizio non disponibile |
+| 507 | `ENOSPC` | Spazio insufficiente |
+| Timeout | `ETIMEDOUT` | Timeout connessione |
+| Network | `EHOSTUNREACH` | Server non raggiungibile |
+
+### Esempi:
+```bash
+# File non trovato → ENOENT
+$ cat /tmp/remotefs/nonexistent.txt
+cat: nonexistent.txt: File o directory non esistente
+
+# Directory già esistente → EEXIST
+$ mkdir /tmp/remotefs/existing
+$ mkdir /tmp/remotefs/existing
+mkdir: existing: File già esistente
+```
+
+Per maggiori dettagli, vedere: [ERROR_MAPPING_IMPLEMENTATION.md](ERROR_MAPPING_IMPLEMENTATION.md)
 
 ## Sviluppo
 
