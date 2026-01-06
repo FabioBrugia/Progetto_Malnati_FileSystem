@@ -10,7 +10,10 @@ Un filesystem remoto implementato in Rust che presenta un mount point locale, ri
 - ✅ Server RESTful implementato in Rust/Actix Web
 - ✅ Client FUSE implementato in Rust
 - ✅ **Mapping fine degli errori HTTP → POSIX** per messaggi di errore chiari e comportamento corretto
-- ✅ Cache intelligente per operazioni di lettura/scrittura ottimizzate
+- ✅ **Cache locale con scadenza (TTL)** per metadati, directory listing e dati file
+- ✅ **Politica write-through** con invalidazione automatica della cache su modifiche
+- ✅ **Modalità daemon** per esecuzione in background
+- ✅ **Recovery automatico mount point** da stati zombie (ENOTCONN)
 - ✅ Logging dettagliato con livelli di debug configurabili
 
 ## Prerequisiti
@@ -68,6 +71,15 @@ mkdir -p /tmp/remotefs
 # Avviare il client (in un altro terminale)
 cd clientFS
 cargo run --release -- --server http://localhost:8080 --mountpoint /tmp/remotefs --verbose
+```
+
+### 2b. Avviare il client in modalità daemon (background):
+```bash
+cd clientFS
+cargo run --release -- --server http://localhost:8080 --mountpoint /tmp/remotefs --daemon
+
+# Per fermare il daemon:
+cargo run --release -- --mountpoint /tmp/remotefs --stop
 ```
 
 ### 3. Utilizzare il filesystem:
@@ -155,6 +167,69 @@ mkdir: existing: File già esistente
 
 Per maggiori dettagli, vedere: [ERROR_MAPPING_IMPLEMENTATION.md](ERROR_MAPPING_IMPLEMENTATION.md)
 
+## Cache Locale con TTL
+
+Il client implementa una cache intelligente con scadenza (TTL) per ottimizzare le prestazioni e ridurre le richieste al server:
+
+### Livelli di Cache
+
+| Tipo Cache | TTL | Descrizione |
+|------------|-----|-------------|
+| **Metadati** | 5 secondi | Attributi file (dimensione, timestamp, permessi) |
+| **Directory** | 3 secondi | Listing delle directory |
+| **Dati File** | 30 secondi | Chunk di dati dei file (128KB per chunk) |
+
+### Politiche di Cache
+
+- **Write-through**: Le operazioni di scrittura scrivono direttamente sul server e invalidano la cache locale
+- **Invalidazione automatica**: Modifiche a file/directory invalidano le cache correlate (file, parent directory, metadati)
+- **Eviction LRU**: Quando la cache raggiunge 10MB, i chunk meno recentemente usati vengono rimossi
+- **Pulizia periodica**: Entry scadute vengono automaticamente rimosse
+
+### Esempi di comportamento:
+```bash
+# Prima lettura - cache miss, fetch dal server
+$ cat /tmp/remotefs/file.txt
+
+# Seconda lettura entro 30 secondi - cache hit
+$ cat /tmp/remotefs/file.txt   # Nessuna richiesta al server
+
+# Dopo modifica - cache invalidata
+$ echo "new content" > /tmp/remotefs/file.txt
+$ cat /tmp/remotefs/file.txt   # Nuovo fetch dal server
+```
+
+## Modalità Daemon
+
+Il client può essere eseguito in background come daemon:
+
+```bash
+# Avviare in background
+cd clientFS
+cargo run --release -- --server http://localhost:8080 \
+    --mountpoint /tmp/remotefs \
+    --daemon \
+    --pidfile /tmp/clientfs.pid \
+    --logfile /tmp/clientfs.log
+
+# Verificare che sia in esecuzione
+cat /tmp/clientfs.pid
+
+# Vedere i log
+tail -f /tmp/clientfs.log
+
+# Fermare il daemon
+cargo run --release -- --mountpoint /tmp/remotefs --stop
+```
+
+## Recovery Automatico Mount Point
+
+Il client gestisce automaticamente stati zombie del mount point:
+
+- **ENOTCONN (Transport endpoint not connected)**: Smontaggio forzato e riutilizzo
+- **Cleanup automatico**: Tentativi con `fusermount -u`, `fusermount -uz`, e `umount -l`
+- **Creazione automatica**: Se il mount point non esiste, viene creato automaticamente
+
 ## Sviluppo
 
 ### Struttura del progetto:
@@ -164,13 +239,14 @@ Per maggiori dettagli, vedere: [ERROR_MAPPING_IMPLEMENTATION.md](ERROR_MAPPING_I
 ├── specifiche.md
 ├── requirements.txt
 ├── src/server/             # Server Rust (Actix)
-├── clientFS/
-└── clientFS/
+│   ├── main.rs
+│   └── handlers.rs
+└── clientFS/               # Client FUSE Rust
     ├── Cargo.toml
     └── src/
         ├── main.rs         # Entry point del client
         ├── api_client.rs   # Client HTTP per le API
-        └── filesystem.rs   # Implementazione FUSE
+        └── filesystem.rs   # Implementazione FUSE + Cache
 ```
 
 ### Test:

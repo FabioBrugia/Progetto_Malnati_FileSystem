@@ -307,12 +307,18 @@ impl ApiClient {
         Ok(())
     }
 
-    pub fn health_check(&self) -> Result<()> {
+    pub fn health_check(&self) -> Result<(), ApiError> {
         let url = format!("{}/health", self.base_url);
-        let response = self.client.get(&url).send()?;
+        
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .map_err(|e| ApiError::from_network_error("health_check", &e))?;
 
-        if !response.status().is_success() {
-            anyhow::bail!("Health check failed");
+        let status = response.status();
+        if !status.is_success() {
+            return Err(ApiError::from_status(status, "health_check"));
         }
 
         Ok(())

@@ -16,7 +16,7 @@ use libc::ENOENT;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, Instant, UNIX_EPOCH};
 
 use crate::api_client::{ApiClient, FileEntry};
 
@@ -24,11 +24,46 @@ const TTL: Duration = Duration::from_secs(1);
 const CHUNK_SIZE: u32 = 128 * 1024; // 128KB chunks for streaming
 const MAX_CACHE_SIZE: usize = 10 * 1024 * 1024; // 10MB cache
 
+// Cache TTL configuration
+const METADATA_CACHE_TTL: Duration = Duration::from_secs(5);  // Metadati scadono dopo 5 secondi
+const DIRECTORY_CACHE_TTL: Duration = Duration::from_secs(3); // Listing directory scade dopo 3 secondi
+const DATA_CACHE_TTL: Duration = Duration::from_secs(30);     // Dati file scadono dopo 30 secondi
+
+/// Wrapper generico per cache con TTL
+#[derive(Debug, Clone)]
+struct CachedEntry<T> {
+    data: T,
+    created_at: Instant,
+    ttl: Duration,
+}
+
+impl<T> CachedEntry<T> {
+    fn new(data: T, ttl: Duration) -> Self {
+        Self {
+            data,
+            created_at: Instant::now(),
+            ttl,
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        self.created_at.elapsed() > self.ttl
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CachedChunk {
     data: Vec<u8>,
+    #[allow(dead_code)]
     offset: u64,
     last_access: SystemTime,
+    created_at: Instant,
+}
+
+impl CachedChunk {
+    fn is_expired(&self) -> bool {
+        self.created_at.elapsed() > DATA_CACHE_TTL
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -37,11 +72,25 @@ struct FileCache {
     total_size: usize,
 }
 
+/// Cache per listing directory
+#[derive(Debug, Clone)]
+struct DirectoryCache {
+    entries: CachedEntry<Vec<FileEntry>>,
+}
+
 #[derive(Debug, Clone)]
 struct INode {
+    #[allow(dead_code)]
     ino: u64,
     path: String,
     attr: FileAttr,
+    cached_at: Instant,  // Per tracciare quando l'inode è stato cachato
+}
+
+impl INode {
+    fn is_metadata_expired(&self) -> bool {
+        self.cached_at.elapsed() > METADATA_CACHE_TTL
+    }
 }
 
 pub struct RemoteFS {
@@ -50,10 +99,11 @@ pub struct RemoteFS {
     path_to_ino: Arc<Mutex<HashMap<String, u64>>>,
     next_ino: Arc<Mutex<u64>>,
     file_handles: Arc<Mutex<HashMap<u64, String>>>,
-    #[allow(dead_code)]
     next_fh: Arc<Mutex<u64>>,
     // Cache for file data chunks
     file_cache: Arc<Mutex<HashMap<String, FileCache>>>,
+    // Cache for directory listings con TTL
+    directory_cache: Arc<Mutex<HashMap<String, DirectoryCache>>>,
 }
 
 impl RemoteFS {
@@ -84,6 +134,7 @@ impl RemoteFS {
             ino: 1,
             path: "/".to_string(),
             attr: root_attr,
+            cached_at: Instant::now(),
         };
 
         inodes.insert(1, root_inode);
@@ -97,6 +148,7 @@ impl RemoteFS {
             file_handles: Arc::new(Mutex::new(HashMap::new())),
             next_fh: Arc::new(Mutex::new(1)),
             file_cache: Arc::new(Mutex::new(HashMap::new())),
+            directory_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -106,6 +158,13 @@ impl RemoteFS {
         let mut next_ino = self.next_ino.lock().unwrap();
 
         if let Some(&ino) = path_to_ino.get(path) {
+            // Aggiorna l'inode esistente con i nuovi metadati (refresh)
+            if let Some(inode) = inodes.get_mut(&ino) {
+                inode.attr.size = entry.size;
+                inode.attr.mtime = UNIX_EPOCH + Duration::from_secs_f64(entry.mtime);
+                inode.attr.ctime = UNIX_EPOCH + Duration::from_secs_f64(entry.ctime);
+                inode.cached_at = Instant::now();
+            }
             return ino;
         }
 
@@ -138,6 +197,7 @@ impl RemoteFS {
             ino,
             path: path.to_string(),
             attr,
+            cached_at: Instant::now(),
         };
 
         inodes.insert(ino, inode);
@@ -166,6 +226,110 @@ impl RemoteFS {
         Some(path)
     }
 
+    /// Ottieni listing directory dalla cache o dal server
+    fn list_directory_cached(&self, path: &str) -> Result<Vec<FileEntry>, crate::api_client::ApiError> {
+        // Controlla prima la cache
+        {
+            let cache = self.directory_cache.lock().unwrap();
+            if let Some(dir_cache) = cache.get(path) {
+                if !dir_cache.entries.is_expired() {
+                    log::debug!("Directory cache HIT for {}", path);
+                    return Ok(dir_cache.entries.data.clone());
+                } else {
+                    log::debug!("Directory cache EXPIRED for {}", path);
+                }
+            }
+        }
+
+        // Cache miss o expired - fetch dal server
+        log::debug!("Directory cache MISS for {}", path);
+        let entries = self.api_client.list_directory(path)?;
+
+        // Salva in cache
+        {
+            let mut cache = self.directory_cache.lock().unwrap();
+            cache.insert(path.to_string(), DirectoryCache {
+                entries: CachedEntry::new(entries.clone(), DIRECTORY_CACHE_TTL),
+            });
+        }
+
+        Ok(entries)
+    }
+
+    /// Invalida la cache di una directory
+    fn invalidate_directory_cache(&self, path: &str) {
+        let mut cache = self.directory_cache.lock().unwrap();
+        if cache.remove(path).is_some() {
+            log::debug!("Invalidated directory cache for {}", path);
+        }
+
+        // Invalida anche la directory parent
+        if let Some(parent_pos) = path.rfind('/') {
+            let parent = if parent_pos == 0 { "/" } else { &path[..parent_pos] };
+            if cache.remove(parent).is_some() {
+                log::debug!("Invalidated parent directory cache for {}", parent);
+            }
+        }
+    }
+
+    /// Invalida tutta la cache per un path (usato in write-through)
+    fn invalidate_all_caches_for_path(&self, path: &str) {
+        // Invalida cache dati file
+        self.invalidate_cache(path);
+
+        // Invalida cache directory
+        self.invalidate_directory_cache(path);
+
+        // Invalida metadati inode
+        {
+            let mut inodes = self.inodes.lock().unwrap();
+            let path_to_ino = self.path_to_ino.lock().unwrap();
+            if let Some(&ino) = path_to_ino.get(path) {
+                if let Some(inode) = inodes.get_mut(&ino) {
+                    // Forza refresh al prossimo accesso
+                    inode.cached_at = Instant::now() - METADATA_CACHE_TTL - Duration::from_secs(1);
+                    log::debug!("Invalidated metadata cache for {}", path);
+                }
+            }
+        }
+    }
+
+    /// Pulisce le entry di cache scadute (chiamato periodicamente)
+    fn cleanup_expired_caches(&self) {
+        // Pulisci cache directory
+        {
+            let mut cache = self.directory_cache.lock().unwrap();
+            cache.retain(|path, dir_cache| {
+                let keep = !dir_cache.entries.is_expired();
+                if !keep {
+                    log::debug!("Cleaned up expired directory cache for {}", path);
+                }
+                keep
+            });
+        }
+
+        // Pulisci cache chunk file
+        {
+            let mut cache = self.file_cache.lock().unwrap();
+            for (path, file_cache) in cache.iter_mut() {
+                let old_count = file_cache.chunks.len();
+                file_cache.chunks.retain(|offset, chunk| {
+                    let keep = !chunk.is_expired();
+                    if !keep {
+                        file_cache.total_size -= chunk.data.len();
+                        log::debug!("Cleaned up expired chunk at offset {} for {}", offset, path);
+                    }
+                    keep
+                });
+                if file_cache.chunks.len() < old_count {
+                    log::debug!("Cleaned up {} expired chunks for {}", old_count - file_cache.chunks.len(), path);
+                }
+            }
+            // Rimuovi file senza chunks
+            cache.retain(|_, file_cache| !file_cache.chunks.is_empty());
+        }
+    }
+
     /// Get data from cache or fetch from server using range requests
     fn read_with_cache(&self, path: &str, offset: u64, size: u32) -> Result<Vec<u8>, crate::api_client::ApiError> {
         let chunk_start = (offset / CHUNK_SIZE as u64) * CHUNK_SIZE as u64;
@@ -176,13 +340,23 @@ impl RemoteFS {
             let mut cache = self.file_cache.lock().unwrap();
             if let Some(file_cache) = cache.get_mut(path) {
                 if let Some(cached_chunk) = file_cache.chunks.get_mut(&chunk_key) {
-                    // Cache hit!
-                    cached_chunk.last_access = SystemTime::now();
-                    let chunk_offset = (offset - chunk_start) as usize;
-                    let chunk_end = (chunk_offset + size as usize).min(cached_chunk.data.len());
+                    // Verifica TTL
+                    if !cached_chunk.is_expired() {
+                        // Cache hit!
+                        cached_chunk.last_access = SystemTime::now();
+                        let chunk_offset = (offset - chunk_start) as usize;
+                        let chunk_end = (chunk_offset + size as usize).min(cached_chunk.data.len());
 
-                    log::debug!("Cache HIT for {} at offset {}", path, offset);
-                    return Ok(cached_chunk.data[chunk_offset..chunk_end].to_vec());
+                        log::debug!("Cache HIT for {} at offset {} (TTL valid)", path, offset);
+                        return Ok(cached_chunk.data[chunk_offset..chunk_end].to_vec());
+                    } else {
+                        // Chunk scaduto - rimuovilo
+                        let removed = file_cache.chunks.remove(&chunk_key);
+                        if let Some(chunk) = removed {
+                            file_cache.total_size -= chunk.data.len();
+                            log::debug!("Cache EXPIRED for {} at offset {}", path, offset);
+                        }
+                    }
                 }
             }
         }
@@ -210,14 +384,27 @@ impl RemoteFS {
             total_size: 0,
         });
 
-        // Check if we need to evict old chunks
+        // Prima rimuovi i chunk scaduti
+        let expired_offsets: Vec<u64> = file_cache.chunks.iter()
+            .filter(|(_, chunk)| chunk.is_expired())
+            .map(|(&offset, _)| offset)
+            .collect();
+
+        for expired_offset in expired_offsets {
+            if let Some(removed) = file_cache.chunks.remove(&expired_offset) {
+                file_cache.total_size -= removed.data.len();
+                log::debug!("Evicted expired chunk at offset {} from cache", expired_offset);
+            }
+        }
+
+        // Check if we need to evict old chunks (LRU policy)
         while file_cache.total_size + data.len() > MAX_CACHE_SIZE && !file_cache.chunks.is_empty() {
-            // Find oldest chunk
+            // Find oldest chunk by last_access
             if let Some((&oldest_offset, _)) = file_cache.chunks.iter()
                 .min_by_key(|(_, chunk)| chunk.last_access) {
                 if let Some(removed) = file_cache.chunks.remove(&oldest_offset) {
                     file_cache.total_size -= removed.data.len();
-                    log::debug!("Evicted chunk at offset {} from cache", oldest_offset);
+                    log::debug!("Evicted LRU chunk at offset {} from cache", oldest_offset);
                 }
             } else {
                 break;
@@ -230,8 +417,11 @@ impl RemoteFS {
             data,
             offset,
             last_access: SystemTime::now(),
+            created_at: Instant::now(),
         });
         file_cache.total_size += chunk_size;
+        log::debug!("Cached chunk at offset {} for {} ({} bytes, TTL {}s)",
+            offset, path, chunk_size, DATA_CACHE_TTL.as_secs());
     }
 
     /// Invalidate cache for a file (called after write operations)
@@ -268,18 +458,23 @@ impl Filesystem for RemoteFS {
             }
         };
 
-        // Check if we already have this inode cached
+        // Check if we already have this inode cached AND it's not expired
         {
             let path_to_ino = self.path_to_ino.lock().unwrap();
             if let Some(&ino) = path_to_ino.get(&path) {
                 if let Some(inode) = self.get_inode(ino) {
-                    reply.entry(&TTL, &inode.attr, 0);
-                    return;
+                    if !inode.is_metadata_expired() {
+                        log::debug!("Metadata cache HIT for {} (TTL valid)", path);
+                        reply.entry(&TTL, &inode.attr, 0);
+                        return;
+                    } else {
+                        log::debug!("Metadata cache EXPIRED for {}", path);
+                    }
                 }
             }
         }
 
-        // Try to get parent directory listing to find this entry
+        // Try to get parent directory listing to find this entry (usando cache)
         let parent_inode = match self.get_inode(parent) {
             Some(inode) => inode,
             None => {
@@ -288,7 +483,7 @@ impl Filesystem for RemoteFS {
             }
         };
 
-        match self.api_client.list_directory(&parent_inode.path) {
+        match self.list_directory_cached(&parent_inode.path) {
             Ok(entries) => {
                 for entry in entries {
                     if entry.name == name.to_string_lossy() {
@@ -317,8 +512,19 @@ impl Filesystem for RemoteFS {
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
         log::debug!("getattr(ino={})", ino);
 
+        // Pulisci cache scadute periodicamente (ogni getattr sulla root)
+        if ino == 1 {
+            self.cleanup_expired_caches();
+        }
+
         match self.get_inode(ino) {
-            Some(inode) => reply.attr(&TTL, &inode.attr),
+            Some(inode) => {
+                // Se i metadati sono scaduti e non è la root, potremmo refresharli
+                if inode.is_metadata_expired() && ino != 1 {
+                    log::debug!("Metadata expired for ino={}, returning cached (will refresh on next lookup)", ino);
+                }
+                reply.attr(&TTL, &inode.attr)
+            },
             None => reply.error(ENOENT),
         }
     }
@@ -351,7 +557,7 @@ impl Filesystem for RemoteFS {
             }
         };
 
-        // Handle truncate (size change)
+        // Handle truncate (size change) - WRITE-THROUGH
         if let Some(new_size) = size {
             if inode.attr.kind == FileType::RegularFile {
                 // Read current file data
@@ -363,17 +569,19 @@ impl Filesystem for RemoteFS {
                 // Resize the file
                 file_data.resize(new_size as usize, 0);
 
-                // Write back to server
+                // Write back to server (write-through)
                 match self.api_client.write_file(&inode.path, &file_data) {
                     Ok(_) => {
-                        // Invalidate cache for this file
-                        self.invalidate_cache(&inode.path);
+                        // WRITE-THROUGH: Invalida TUTTE le cache per questo path
+                        self.invalidate_all_caches_for_path(&inode.path);
 
                         let mut inodes = self.inodes.lock().unwrap();
                         if let Some(inode) = inodes.get_mut(&ino) {
                             inode.attr.size = new_size;
                             inode.attr.mtime = SystemTime::now();
+                            inode.cached_at = Instant::now(); // Refresh timestamp
                         }
+                        log::info!("Write-through: truncated {} to {} bytes", inode.path, new_size);
                     }
                     Err(e) => {
                         log::error!("Failed to truncate file: {}", e);
@@ -390,6 +598,7 @@ impl Filesystem for RemoteFS {
             if let Some(inode) = inodes.get_mut(&ino) {
                 inode.attr.perm = (new_mode & 0o777) as u16;
                 inode.attr.ctime = SystemTime::now();
+                inode.cached_at = Instant::now();
             }
         }
 
@@ -418,7 +627,8 @@ impl Filesystem for RemoteFS {
             }
         };
 
-        match self.api_client.list_directory(&inode.path) {
+        // Usa cache directory con TTL
+        match self.list_directory_cached(&inode.path) {
             Ok(entries) => {
                 let mut i = offset;
 
@@ -438,7 +648,7 @@ impl Filesystem for RemoteFS {
                     i += 1;
                 }
 
-                for (_idx, entry) in entries.iter().enumerate().skip((i - 2).max(0) as usize) {
+                for entry in entries.iter().skip((i - 2).max(0) as usize) {
                     let full_path = if inode.path == "/" {
                         format!("/{}", entry.name)
                     } else {
@@ -570,11 +780,11 @@ impl Filesystem for RemoteFS {
             }
         };
 
-        // Try to use efficient chunk-based write first
+        // WRITE-THROUGH: Scrivi immediatamente sul server
         match self.api_client.write_file_chunk(&inode.path, offset as u64, data) {
             Ok(_) => {
-                // Invalidate cache for this file since it's been modified
-                self.invalidate_cache(&inode.path);
+                // WRITE-THROUGH + INVALIDATE: Invalida TUTTE le cache per questo file
+                self.invalidate_all_caches_for_path(&inode.path);
 
                 // Update inode metadata
                 let mut inodes = self.inodes.lock().unwrap();
@@ -582,8 +792,11 @@ impl Filesystem for RemoteFS {
                     let new_size = ((offset as u64) + (data.len() as u64)).max(inode.attr.size);
                     inode.attr.size = new_size;
                     inode.attr.mtime = SystemTime::now();
+                    inode.cached_at = Instant::now(); // Refresh cache timestamp
                 }
 
+                log::debug!("Write-through: wrote {} bytes to {} at offset {}",
+                    data.len(), inode.path, offset);
                 reply.written(data.len() as u32);
             }
             Err(e) => {
@@ -612,8 +825,12 @@ impl Filesystem for RemoteFS {
             }
         };
 
+        // WRITE-THROUGH: Crea directory sul server
         match self.api_client.create_directory(&path) {
             Ok(_) => {
+                // Invalida cache directory parent (write-through)
+                self.invalidate_directory_cache(&path);
+
                 let entry = FileEntry {
                     name: name.to_string_lossy().to_string(),
                     is_dir: true,
@@ -625,6 +842,7 @@ impl Filesystem for RemoteFS {
 
                 let ino = self.get_or_create_inode(&path, &entry);
                 if let Some(inode) = self.get_inode(ino) {
+                    log::info!("Write-through: created directory {}", path);
                     reply.entry(&TTL, &inode.attr, 0);
                 } else {
                     reply.error(libc::EIO);
@@ -648,9 +866,13 @@ impl Filesystem for RemoteFS {
             }
         };
 
+        // WRITE-THROUGH: Elimina file sul server
         match self.api_client.delete(&path) {
             Ok(_) => {
-                // Remove from cache
+                // WRITE-THROUGH: Invalida TUTTE le cache
+                self.invalidate_all_caches_for_path(&path);
+
+                // Remove from inode cache
                 let mut path_to_ino = self.path_to_ino.lock().unwrap();
                 let mut inodes = self.inodes.lock().unwrap();
 
@@ -658,6 +880,7 @@ impl Filesystem for RemoteFS {
                     inodes.remove(&ino);
                 }
 
+                log::info!("Write-through: deleted file {}", path);
                 reply.ok();
             }
             Err(e) => {
@@ -678,9 +901,13 @@ impl Filesystem for RemoteFS {
             }
         };
 
+        // WRITE-THROUGH: Elimina directory sul server
         match self.api_client.delete(&path) {
             Ok(_) => {
-                // Remove from cache
+                // WRITE-THROUGH: Invalida TUTTE le cache
+                self.invalidate_all_caches_for_path(&path);
+
+                // Remove from inode cache
                 let mut path_to_ino = self.path_to_ino.lock().unwrap();
                 let mut inodes = self.inodes.lock().unwrap();
 
@@ -688,6 +915,7 @@ impl Filesystem for RemoteFS {
                     inodes.remove(&ino);
                 }
 
+                log::info!("Write-through: deleted directory {}", path);
                 reply.ok();
             }
             Err(e) => {
@@ -728,19 +956,26 @@ impl Filesystem for RemoteFS {
             }
         };
 
+        // WRITE-THROUGH: Rinomina sul server
         match self.api_client.rename(&from_path, &to_path) {
             Ok(_) => {
-                // Update cache
+                // WRITE-THROUGH: Invalida TUTTE le cache per entrambi i path
+                self.invalidate_all_caches_for_path(&from_path);
+                self.invalidate_all_caches_for_path(&to_path);
+
+                // Update inode cache
                 let mut path_to_ino = self.path_to_ino.lock().unwrap();
                 let mut inodes = self.inodes.lock().unwrap();
 
                 if let Some(ino) = path_to_ino.remove(&from_path) {
                     path_to_ino.insert(to_path.clone(), ino);
                     if let Some(inode) = inodes.get_mut(&ino) {
-                        inode.path = to_path;
+                        inode.path = to_path.clone();
+                        inode.cached_at = Instant::now();
                     }
                 }
 
+                log::info!("Write-through: renamed {} -> {}", from_path, to_path);
                 reply.ok();
             }
             Err(e) => {
@@ -770,9 +1005,12 @@ impl Filesystem for RemoteFS {
             }
         };
 
-        // Create empty file on server
+        // WRITE-THROUGH: Crea file vuoto sul server
         match self.api_client.write_file(&path, &[]) {
             Ok(_) => {
+                // Invalida cache directory parent (write-through)
+                self.invalidate_directory_cache(&path);
+
                 let entry = FileEntry {
                     name: name.to_string_lossy().to_string(),
                     is_dir: false,
@@ -788,6 +1026,7 @@ impl Filesystem for RemoteFS {
                     let fh = *next_fh;
                     *next_fh += 1;
 
+                    log::info!("Write-through: created file {}", path);
                     reply.created(&TTL, &inode.attr, 0, fh, 0);
                 } else {
                     reply.error(libc::EIO);
