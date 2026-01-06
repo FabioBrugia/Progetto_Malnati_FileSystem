@@ -246,6 +246,8 @@ impl RemoteFS {
         let options = vec![
             MountOption::RW,
             MountOption::FSName("remotefs".to_string()),
+            //MountOption::AutoUnmount,
+            //MountOption::AllowOther
         ];
 
         log::info!("Mounting filesystem at {}", mountpoint);
