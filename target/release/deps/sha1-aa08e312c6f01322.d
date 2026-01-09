@@ -1,0 +1,10 @@
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/target/release/deps/sha1-aa08e312c6f01322.d: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress/soft.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress/x86.rs
+
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/target/release/deps/libsha1-aa08e312c6f01322.rlib: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress/soft.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress/x86.rs
+
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/target/release/deps/libsha1-aa08e312c6f01322.rmeta: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress/soft.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress/x86.rs
+
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/lib.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress/soft.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha1-0.10.6/src/compress/x86.rs:

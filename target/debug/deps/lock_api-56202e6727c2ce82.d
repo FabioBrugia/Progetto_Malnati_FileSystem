@@ -1,0 +1,10 @@
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/target/debug/deps/lock_api-56202e6727c2ce82.d: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/mutex.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/remutex.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/rwlock.rs
+
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/target/debug/deps/liblock_api-56202e6727c2ce82.rlib: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/mutex.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/remutex.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/rwlock.rs
+
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/target/debug/deps/liblock_api-56202e6727c2ce82.rmeta: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/mutex.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/remutex.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/rwlock.rs
+
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/lib.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/mutex.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/remutex.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/rwlock.rs:

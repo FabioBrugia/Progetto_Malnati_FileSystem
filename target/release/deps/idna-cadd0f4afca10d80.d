@@ -1,0 +1,10 @@
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/target/release/deps/idna-cadd0f4afca10d80.d: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/deprecated.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/punycode.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/uts46.rs
+
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/target/release/deps/libidna-cadd0f4afca10d80.rlib: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/deprecated.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/punycode.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/uts46.rs
+
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/target/release/deps/libidna-cadd0f4afca10d80.rmeta: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/deprecated.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/punycode.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/uts46.rs
+
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/lib.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/deprecated.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/punycode.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idna-1.1.0/src/uts46.rs:

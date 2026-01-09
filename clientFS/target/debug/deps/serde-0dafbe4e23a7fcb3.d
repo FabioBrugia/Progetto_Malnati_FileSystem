@@ -1,0 +1,12 @@
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/clientFS/target/debug/deps/serde-0dafbe4e23a7fcb3.d: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/clientFS/target/debug/build/serde-f38b255d54569d39/out/private.rs
+
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/clientFS/target/debug/deps/libserde-0dafbe4e23a7fcb3.rmeta: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/clientFS/target/debug/build/serde-f38b255d54569d39/out/private.rs
+
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/clientFS/target/debug/build/serde-f38b255d54569d39/out/private.rs:
+
+# env-dep:OUT_DIR=/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/clientFS/target/debug/build/serde-f38b255d54569d39/out

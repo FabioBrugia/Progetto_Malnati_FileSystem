@@ -1,0 +1,9 @@
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/clientFS/target/debug/deps/futures_executor-c29d5b1e8ec8e28e.d: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/local_pool.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/enter.rs
+
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/clientFS/target/debug/deps/libfutures_executor-c29d5b1e8ec8e28e.rlib: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/local_pool.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/enter.rs
+
+/home/fabiobrugiafreddo/RustroverProjects/Progetto_Malnati_FileSystem/clientFS/target/debug/deps/libfutures_executor-c29d5b1e8ec8e28e.rmeta: /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/lib.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/local_pool.rs /home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/enter.rs
+
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/lib.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/local_pool.rs:
+/home/fabiobrugiafreddo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-executor-0.3.31/src/enter.rs:
