@@ -61,7 +61,7 @@ cargo build --release
 cargo run --bin server
 ```
 
-Il server parte su `http://0.0.0.0:9000` e utilizza `/tmp/remote_fs_test` come storage locale (creato automaticamente).
+Il server parte su `http://0.0.0.0:8080` e utilizza `/tmp/remote_fs_test` come storage locale (creato automaticamente).
 
 ### 2. Creare un mount point e avviare il client:
 ```bash
@@ -272,7 +272,7 @@ cat file.txt
 - Verificare che Rust sia aggiornato: `rustup update`
 
 ### Il client non si monta:
-- Verificare che il server sia in esecuzione: `curl http://localhost:9000/health`
+- Verificare che il server sia in esecuzione: `curl http://localhost:8080/health`
 - Verificare che FUSE sia disponibile: `fusermount3 --version`
 - Verificare i permessi sulla directory di mount
 - Provare con `sudo` se necessario

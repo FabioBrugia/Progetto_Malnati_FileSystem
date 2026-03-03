@@ -79,16 +79,23 @@ struct ListResponse {
 pub struct ApiClient {
     base_url: String,
     client: Client,
+    token: String,
 }
 
 impl ApiClient {
-    pub fn new(base_url: String) -> Result<Self> {
+    pub fn new(base_url: String, token: String) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .context("Failed to create HTTP client")?;
 
-        Ok(Self { base_url, client })
+        Ok(Self { base_url, client, token })
+    }
+    fn authorized(
+        &self,
+        builder: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        builder.header("Authorization", format!("Bearer {}", self.token))
     }
 
     pub fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, ApiError> {
@@ -96,8 +103,7 @@ impl ApiClient {
         log::debug!("Listing directory: {}", url);
 
         let response = self
-            .client
-            .get(&url)
+            .authorized(self.client.get(&url))
             .send()
             .map_err(|e| ApiError::from_network_error("list_directory", &e))?;
 
@@ -122,8 +128,7 @@ impl ApiClient {
         log::debug!("Reading file: {}", url);
 
         let response = self
-            .client
-            .get(&url)
+            .authorized(self.client.get(&url))
             .send()
             .map_err(|e| ApiError::from_network_error("read_file", &e))?;
 
@@ -148,10 +153,12 @@ impl ApiClient {
         log::debug!("Reading file chunk: {} (offset={}, size={})", url, offset, size);
 
         let response = self
-            .client
-            .get(&url)
-            .header("Range", format!("bytes={}-{}", offset, end))
-            .send()
+            .authorized(
+                self.client
+                    .get(&url)
+                    .header("Range", format!("bytes={}-{}", offset, end))
+            )
+            .send()            
             .map_err(|e| ApiError::from_network_error("read_file_chunk", &e))?;
 
         let status = response.status();
@@ -180,9 +187,7 @@ impl ApiClient {
         log::debug!("Writing file: {} ({} bytes)", url, data.len());
 
         let response = self
-            .client
-            .put(&url)
-            .body(data.to_vec())
+            .authorized(self.client.put(&url).body(data.to_vec()))
             .send()
             .map_err(|e| ApiError::from_network_error("write_file", &e))?;
 
@@ -201,10 +206,12 @@ impl ApiClient {
 
         let end = offset + data.len() as u64 - 1;
         let response = self
-            .client
-            .patch(&url)
-            .header("Content-Range", format!("bytes {}-{}/*", offset, end))
-            .body(data.to_vec())
+            .authorized(
+                self.client
+                    .patch(&url)
+                    .header("Content-Range", format!("bytes {}-{}/*", offset, end))
+                    .body(data.to_vec())
+            )
             .send()
             .map_err(|e| ApiError::from_network_error("write_file_chunk", &e))?;
 
@@ -243,8 +250,7 @@ impl ApiClient {
         log::debug!("Creating directory: {}", url);
 
         let response = self
-            .client
-            .post(&url)
+            .authorized(self.client.post(&url))
             .send()
             .map_err(|e| ApiError::from_network_error("create_directory", &e))?;
 
@@ -262,8 +268,7 @@ impl ApiClient {
         log::debug!("Deleting: {}", url);
 
         let response = self
-            .client
-            .delete(&url)
+            .authorized(self.client.delete(&url))
             .send()
             .map_err(|e| ApiError::from_network_error("delete", &e))?;
 
@@ -292,9 +297,7 @@ impl ApiClient {
         };
 
         let response = self
-            .client
-            .post(&url)
-            .json(&request_body)
+            .authorized(self.client.post(&url).json(&request_body))
             .send()
             .map_err(|e| ApiError::from_network_error("rename", &e))?;
 
@@ -311,8 +314,7 @@ impl ApiClient {
         let url = format!("{}/health", self.base_url);
         
         let response = self
-            .client
-            .get(&url)
+            .authorized(self.client.get(&url))
             .send()
             .map_err(|e| ApiError::from_network_error("health_check", &e))?;
 

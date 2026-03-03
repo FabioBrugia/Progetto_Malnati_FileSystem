@@ -8,9 +8,17 @@ use std::process::Command;
 use std::fs;
 use daemonize::Daemonize;
 use std::fs::File;
+use rpassword::read_password;
+use std::io::{self, Write};
 
 use api_client::ApiClient;
 use filesystem::RemoteFS;
+use reqwest::blocking::Client;
+
+#[derive(serde::Deserialize)]
+struct AuthResponse {
+    token: String,
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -122,8 +130,32 @@ fn ensure_mountpoint(dir: &PathBuf) -> Result<()> {
     }
 }
 
+fn ask_password() -> String {
+    print!("Password: ");
+    io::stdout().flush().unwrap();
+    read_password().unwrap()
+}
 
 fn main() -> Result<()> {
+    let password = ask_password();
+
+    let http_client = Client::new();
+
+    let response = http_client
+        .post("http://127.0.0.1:8080/auth")
+        .json(&serde_json::json!({
+            "password": password
+        }))
+        .send()
+        .expect("Server non raggiungibile");
+
+    if !response.status().is_success() {
+        eprintln!("Autenticazione fallita.");
+        std::process::exit(1);
+    }
+
+    let auth: AuthResponse = response.json().unwrap();
+    let token = auth.token;
     let args = Args::parse();
 
     // Se richiesto --stop, ferma il daemon
@@ -173,7 +205,7 @@ fn main() -> Result<()> {
     ensure_mountpoint(&args.mountpoint)?;
 
     // Create API client
-    let api_client = ApiClient::new(args.server.clone())
+    let api_client = ApiClient::new(args.server.clone(), token)
         .context("Failed to create API client")?;
 
     // Test connection to server
