@@ -3,7 +3,7 @@
 
 MOUNTPOINT="${1:-/tmp/remotefs}"
 SERVER="${2:-http://localhost:8080}"
-MODE="${3:-foreground}"  # foreground, daemon, stop
+MODE="${3:-deamon}"  # foreground, daemon, stop
 
 echo "=== Remote File System Client ==="
 echo "Server: $SERVER"

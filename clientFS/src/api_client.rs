@@ -1,66 +1,11 @@
 use anyhow::{Context, Result};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// Custom error type that maps HTTP errors to POSIX error codes
-#[derive(Debug)]
-pub struct ApiError {
-    pub errno: i32,
-    pub message: String,
-}
+use crate::error::ApiError;
 
-impl ApiError {
-    /// Map HTTP status code to POSIX error code
-    pub fn from_status(status: reqwest::StatusCode, operation: &str) -> Self {
-        let (errno, message) = match status.as_u16() {
-            // Client errors
-            400 => (libc::EINVAL, format!("{}: Bad request", operation)),
-            401 | 403 => (libc::EACCES, format!("{}: Permission denied", operation)),
-            404 => (libc::ENOENT, format!("{}: File or directory not found", operation)),
-            405 => (libc::ENOSYS, format!("{}: Operation not supported", operation)),
-            408 => (libc::ETIMEDOUT, format!("{}: Request timeout", operation)),
-            409 => (libc::EEXIST, format!("{}: Resource already exists", operation)),
-            413 => (libc::EFBIG, format!("{}: File too large", operation)),
-            415 => (libc::EINVAL, format!("{}: Unsupported media type", operation)),
-            429 => (libc::EAGAIN, format!("{}: Too many requests", operation)),
-            
-            // Server errors
-            500 => (libc::EIO, format!("{}: Internal server error", operation)),
-            501 => (libc::ENOSYS, format!("{}: Not implemented", operation)),
-            502 | 503 => (libc::EAGAIN, format!("{}: Service unavailable", operation)),
-            504 => (libc::ETIMEDOUT, format!("{}: Gateway timeout", operation)),
-            507 => (libc::ENOSPC, format!("{}: Insufficient storage", operation)),
-            
-            // Default for other errors
-            _ => (libc::EIO, format!("{}: HTTP error {}", operation, status.as_u16())),
-        };
-        
-        Self { errno, message }
-    }
-
-    /// Create error from network/connection issues
-    pub fn from_network_error(operation: &str, err: &reqwest::Error) -> Self {
-        let (errno, message) = if err.is_timeout() {
-            (libc::ETIMEDOUT, format!("{}: Connection timeout", operation))
-        } else if err.is_connect() {
-            (libc::EHOSTUNREACH, format!("{}: Cannot connect to server", operation))
-        } else {
-            (libc::EIO, format!("{}: Network error: {}", operation, err))
-        };
-        
-        Self { errno, message }
-    }
-}
-
-impl std::fmt::Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} (errno: {})", self.message, self.errno)
-    }
-}
-
-impl std::error::Error for ApiError {}
-
+/// Voce di un file/directory restituita dal server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
     pub name: String,
@@ -76,36 +21,54 @@ struct ListResponse {
     entries: Vec<FileEntry>,
 }
 
+/// Client HTTP asincrono per comunicare con il server di storage.
+///
+/// Utilizza `reqwest` async internamente, ma espone metodi sincroni
+/// tramite `block_on()` per compatibilità con il trait `Filesystem` di FUSE.
 pub struct ApiClient {
     base_url: String,
     client: Client,
     token: String,
+    runtime: tokio::runtime::Handle,
 }
 
 impl ApiClient {
-    pub fn new(base_url: String, token: String) -> Result<Self> {
+    /// Crea un nuovo client API.
+    ///
+    /// # Argomenti
+    /// * `base_url` - URL base del server (es. "http://localhost:8080")
+    /// * `token` - Token JWT per l'autenticazione
+    /// * `runtime` - Handle al runtime Tokio per eseguire future async
+    pub fn new(base_url: String, token: String, runtime: tokio::runtime::Handle) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .context("Failed to create HTTP client")?;
 
-        Ok(Self { base_url, client, token })
+        Ok(Self { base_url, client, token, runtime })
     }
-    fn authorized(
-        &self,
-        builder: reqwest::blocking::RequestBuilder,
-    ) -> reqwest::blocking::RequestBuilder {
+
+    /// Aggiunge l'header Authorization alla request.
+    fn authorized(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         builder.header("Authorization", format!("Bearer {}", self.token))
     }
 
+    /// Esegue un future async bloccando il thread corrente.
+    /// Usa `block_in_place` per permettere l'uso anche dall'interno di un runtime Tokio.
+    fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
+        tokio::task::block_in_place(|| self.runtime.block_on(future))
+    }
+
+    // ── Operazioni sul filesystem ────────────────────────────────────
+
+    /// Elenca il contenuto di una directory.
     pub fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, ApiError> {
         let url = format!("{}/list/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Listing directory: {}", url);
 
-        let response = self
-            .authorized(self.client.get(&url))
-            .send()
-            .map_err(|e| ApiError::from_network_error("list_directory", &e))?;
+        let response = self.block_on(
+            self.authorized(self.client.get(&url)).send()
+        ).map_err(|e| ApiError::from_network_error("list_directory", &e))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -113,24 +76,20 @@ impl ApiClient {
             return Err(ApiError::from_status(status, "list_directory"));
         }
 
-        let list_response: ListResponse = response
-            .json()
-            .map_err(|e| ApiError {
-                errno: libc::EIO,
-                message: format!("list_directory: Failed to parse response: {}", e),
-            })?;
+        let list_response: ListResponse = self.block_on(response.json())
+            .map_err(|e| ApiError::io_error("list_directory", &format!("Failed to parse response: {}", e)))?;
 
         Ok(list_response.entries)
     }
 
+    /// Legge l'intero contenuto di un file.
     pub fn read_file(&self, path: &str) -> Result<Vec<u8>, ApiError> {
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Reading file: {}", url);
 
-        let response = self
-            .authorized(self.client.get(&url))
-            .send()
-            .map_err(|e| ApiError::from_network_error("read_file", &e))?;
+        let response = self.block_on(
+            self.authorized(self.client.get(&url)).send()
+        ).map_err(|e| ApiError::from_network_error("read_file", &e))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -138,28 +97,25 @@ impl ApiClient {
             return Err(ApiError::from_status(status, "read_file"));
         }
 
-        let bytes = response.bytes().map_err(|e| ApiError {
-            errno: libc::EIO,
-            message: format!("read_file: Failed to read response: {}", e),
-        })?;
-        
+        let bytes = self.block_on(response.bytes())
+            .map_err(|e| ApiError::io_error("read_file", &format!("Failed to read response: {}", e)))?;
+
         Ok(bytes.to_vec())
     }
 
+    /// Legge un chunk di un file usando HTTP Range requests.
     pub fn read_file_chunk(&self, path: &str, offset: u64, size: u32) -> Result<Vec<u8>, ApiError> {
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
         let end = offset + size as u64 - 1;
 
         log::debug!("Reading file chunk: {} (offset={}, size={})", url, offset, size);
 
-        let response = self
-            .authorized(
-                self.client
-                    .get(&url)
+        let response = self.block_on(
+            self.authorized(
+                self.client.get(&url)
                     .header("Range", format!("bytes={}-{}", offset, end))
-            )
-            .send()            
-            .map_err(|e| ApiError::from_network_error("read_file_chunk", &e))?;
+            ).send()
+        ).map_err(|e| ApiError::from_network_error("read_file_chunk", &e))?;
 
         let status = response.status();
         if !status.is_success() && status.as_u16() != 206 {
@@ -167,10 +123,8 @@ impl ApiClient {
             return Err(ApiError::from_status(status, "read_file_chunk"));
         }
 
-        let bytes = response.bytes().map_err(|e| ApiError {
-            errno: libc::EIO,
-            message: format!("read_file_chunk: Failed to read response: {}", e),
-        })?;
+        let bytes = self.block_on(response.bytes())
+            .map_err(|e| ApiError::io_error("read_file_chunk", &format!("Failed to read response: {}", e)))?;
 
         let result = if bytes.len() > size as usize {
             bytes[0..size as usize].to_vec()
@@ -182,14 +136,14 @@ impl ApiClient {
         Ok(result)
     }
 
+    /// Scrive (o sovrascrive) l'intero contenuto di un file.
     pub fn write_file(&self, path: &str, data: &[u8]) -> Result<(), ApiError> {
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Writing file: {} ({} bytes)", url, data.len());
 
-        let response = self
-            .authorized(self.client.put(&url).body(data.to_vec()))
-            .send()
-            .map_err(|e| ApiError::from_network_error("write_file", &e))?;
+        let response = self.block_on(
+            self.authorized(self.client.put(&url).body(data.to_vec())).send()
+        ).map_err(|e| ApiError::from_network_error("write_file", &e))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -200,20 +154,21 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Scrive un chunk di dati a un offset specifico (usa PATCH con Content-Range).
+    ///
+    /// Se il server non supporta PATCH (405), fallback a read-modify-write.
     pub fn write_file_chunk(&self, path: &str, offset: u64, data: &[u8]) -> Result<(), ApiError> {
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Writing file chunk: {} (offset={}, size={})", url, offset, data.len());
 
         let end = offset + data.len() as u64 - 1;
-        let response = self
-            .authorized(
-                self.client
-                    .patch(&url)
+        let response = self.block_on(
+            self.authorized(
+                self.client.patch(&url)
                     .header("Content-Range", format!("bytes {}-{}/*", offset, end))
                     .body(data.to_vec())
-            )
-            .send()
-            .map_err(|e| ApiError::from_network_error("write_file_chunk", &e))?;
+            ).send()
+        ).map_err(|e| ApiError::from_network_error("write_file_chunk", &e))?;
 
         let status = response.status();
         if status.is_success() {
@@ -230,6 +185,7 @@ impl ApiClient {
         Err(ApiError::from_status(status, "write_file_chunk"))
     }
 
+    /// Fallback: legge tutto il file, modifica in memoria, riscrive tutto.
     fn write_file_chunk_fallback(&self, path: &str, offset: u64, data: &[u8]) -> Result<(), ApiError> {
         log::warn!("Using inefficient read-modify-write for {}", path);
 
@@ -241,18 +197,17 @@ impl ApiClient {
         }
 
         file_data[offset as usize..end_offset].copy_from_slice(data);
-
         self.write_file(path, &file_data)
     }
 
+    /// Crea una nuova directory sul server.
     pub fn create_directory(&self, path: &str) -> Result<(), ApiError> {
         let url = format!("{}/mkdir/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Creating directory: {}", url);
 
-        let response = self
-            .authorized(self.client.post(&url))
-            .send()
-            .map_err(|e| ApiError::from_network_error("create_directory", &e))?;
+        let response = self.block_on(
+            self.authorized(self.client.post(&url)).send()
+        ).map_err(|e| ApiError::from_network_error("create_directory", &e))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -263,14 +218,14 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Elimina un file o una directory sul server.
     pub fn delete(&self, path: &str) -> Result<(), ApiError> {
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Deleting: {}", url);
 
-        let response = self
-            .authorized(self.client.delete(&url))
-            .send()
-            .map_err(|e| ApiError::from_network_error("delete", &e))?;
+        let response = self.block_on(
+            self.authorized(self.client.delete(&url)).send()
+        ).map_err(|e| ApiError::from_network_error("delete", &e))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -281,6 +236,7 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Rinomina un file o directory sul server.
     pub fn rename(&self, from: &str, to: &str) -> Result<(), ApiError> {
         let url = format!("{}/rename", self.base_url);
         log::debug!("Renaming: {} -> {}", from, to);
@@ -296,10 +252,9 @@ impl ApiClient {
             to: to.to_string(),
         };
 
-        let response = self
-            .authorized(self.client.post(&url).json(&request_body))
-            .send()
-            .map_err(|e| ApiError::from_network_error("rename", &e))?;
+        let response = self.block_on(
+            self.authorized(self.client.post(&url).json(&request_body)).send()
+        ).map_err(|e| ApiError::from_network_error("rename", &e))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -310,13 +265,13 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Verifica la connessione al server.
     pub fn health_check(&self) -> Result<(), ApiError> {
         let url = format!("{}/health", self.base_url);
-        
-        let response = self
-            .authorized(self.client.get(&url))
-            .send()
-            .map_err(|e| ApiError::from_network_error("health_check", &e))?;
+
+        let response = self.block_on(
+            self.authorized(self.client.get(&url)).send()
+        ).map_err(|e| ApiError::from_network_error("health_check", &e))?;
 
         let status = response.status();
         if !status.is_success() {

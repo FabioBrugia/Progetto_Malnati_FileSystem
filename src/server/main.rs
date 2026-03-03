@@ -8,7 +8,7 @@ mod auth;
 mod auth_middleware;
 
 use auth_middleware::AuthMiddleware;
-const STORED_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$J5s7+n/0wmTc/efZmJLqqg$rc0OMVsF/iIwYKWAmoG+Ktar6C5Z9QTBe4HGJtHG70E";
+const STORED_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$I1XtoiH6Ni2CbrR3GWRlXA$KK/6iTuzFPa8PdFd7CFtkRKEH/0ZpNV0hPTZeiKH3BQ";
 
 #[derive(Deserialize)]
 struct AuthRequest {
