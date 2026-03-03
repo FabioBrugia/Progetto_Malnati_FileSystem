@@ -1,21 +1,13 @@
-use actix_web::{App, HttpResponse, HttpServer, Responder, post, web};
+use actix_web::{App, HttpResponse, HttpServer, post, web};
 use actix_web::middleware::Logger;
 use actix_cors::Cors;
 use serde::{Deserialize, Serialize};
 use std::fs;
 mod handlers;
 mod auth;
-use rand::Rng;
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 mod auth_middleware;
 
-use auth_middleware::{AuthMiddleware, TokenStore};
-
-fn generate_token() -> String {
-    let bytes: [u8; 32] = rand::thread_rng().gen();
-    hex::encode(bytes)
-}
+use auth_middleware::AuthMiddleware;
 const STORED_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$J5s7+n/0wmTc/efZmJLqqg$rc0OMVsF/iIwYKWAmoG+Ktar6C5Z9QTBe4HGJtHG70E";
 
 #[derive(Deserialize)]
@@ -30,13 +22,14 @@ struct AuthResponse {
 
 #[post("/auth")]
 async fn authenticate(
-    tokens: web::Data<TokenStore>,
+    jwt_config: web::Data<auth::JwtConfig>,
     req: web::Json<AuthRequest>,
 ) -> Result<HttpResponse, actix_web::Error> {
     if auth::verify_password(&req.password, STORED_PASSWORD_HASH) {
-        let token = generate_token();
-        tokens.lock().unwrap().insert(token.clone());
-        Ok(HttpResponse::Ok().json(AuthResponse { token }))
+        match auth::create_jwt("client", &jwt_config) {
+            Ok(token) => Ok(HttpResponse::Ok().json(AuthResponse { token })),
+            Err(_) => Ok(HttpResponse::InternalServerError().finish()),
+        }
     } else{
         Ok(HttpResponse::Unauthorized().finish())
     }
@@ -58,21 +51,30 @@ async fn main() -> std::io::Result<()> {
     // Crea la directory base se non esiste
     fs::create_dir_all(&base_dir).unwrap();
 
-    let tokens: TokenStore = Arc::new(Mutex::new(HashSet::new()));
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| "change-me-in-production".to_string());
+    let jwt_expiration_seconds = std::env::var("JWT_EXPIRATION_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(3600);
+    let jwt_config = auth::JwtConfig {
+        secret: jwt_secret,
+        expiration_seconds: jwt_expiration_seconds,
+    };
 
     HttpServer::new(move || {
         let cors = Cors::default();
         App::new()
             .wrap(Logger::default())
             .wrap(AuthMiddleware {
-                tokens: tokens.clone(),
+                jwt_config: jwt_config.clone(),
             })
             .app_data(web::Data::new(
                 handlers::AppState {
                     base_dir: base_dir.clone(),
                 }
             ))
-            .app_data(web::Data::new(tokens.clone()))
+            .app_data(web::Data::new(jwt_config.clone()))
             .service(authenticate)
             .wrap(cors)
             .route("/", web::get().to(handlers::index))

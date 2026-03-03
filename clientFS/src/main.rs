@@ -137,12 +137,20 @@ fn ask_password() -> String {
 }
 
 fn main() -> Result<()> {
+    let args = Args::parse();
+
+    // Se richiesto --stop, ferma il daemon
+    if args.stop {
+        return stop_daemon(&args.pidfile, &args.mountpoint);
+    }
+
     let password = ask_password();
 
     let http_client = Client::new();
+    let auth_url = format!("{}/auth", args.server.trim_end_matches('/'));
 
     let response = http_client
-        .post("http://127.0.0.1:8080/auth")
+        .post(&auth_url)
         .json(&serde_json::json!({
             "password": password
         }))
@@ -156,12 +164,6 @@ fn main() -> Result<()> {
 
     let auth: AuthResponse = response.json().unwrap();
     let token = auth.token;
-    let args = Args::parse();
-
-    // Se richiesto --stop, ferma il daemon
-    if args.stop {
-        return stop_daemon(&args.pidfile, &args.mountpoint);
-    }
 
     // Se daemon mode, daemonizza prima di tutto
     if args.daemon {

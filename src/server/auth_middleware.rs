@@ -3,15 +3,12 @@ use actix_web::{
     Error, HttpResponse,
 };
 use futures_util::future::{ok, LocalBoxFuture, Ready};
-use std::collections::HashSet;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 use actix_web::body::EitherBody;
-
-pub type TokenStore = Arc<Mutex<HashSet<String>>>;
+use crate::auth::{self, JwtConfig};
 
 pub struct AuthMiddleware {
-    pub tokens: TokenStore,
+    pub jwt_config: JwtConfig,
 }
 
 impl<S, B> Transform<S, ServiceRequest> for AuthMiddleware
@@ -27,14 +24,14 @@ where
     fn new_transform(&self, service: S) -> Self::Future {
         ok(AuthMiddlewareInner {
             service: Rc::new(service),
-            tokens: self.tokens.clone(),
+            jwt_config: self.jwt_config.clone(),
         })
     }
 }
 
 pub struct AuthMiddlewareInner<S> {
     service: Rc<S>,
-    tokens: TokenStore,
+    jwt_config: JwtConfig,
 }
 
 impl<S, B> Service<ServiceRequest> for AuthMiddlewareInner<S>
@@ -64,7 +61,6 @@ where
             });      
         }
 
-        let tokens = self.tokens.clone();
         let auth_header = req
             .headers()
             .get("Authorization")
@@ -73,7 +69,7 @@ where
 
         let token = auth_header.strip_prefix("Bearer ").unwrap_or("");
 
-        if !tokens.lock().unwrap().contains(token) {
+        if token.is_empty() || !auth::verify_jwt(token, &self.jwt_config) {
             let response = req.into_response(HttpResponse::Unauthorized().finish());
             return Box::pin(async move {
                 Ok(response.map_into_right_body())
