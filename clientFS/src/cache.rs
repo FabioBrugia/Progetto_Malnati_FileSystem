@@ -15,7 +15,7 @@ pub const METADATA_CACHE_TTL: Duration = Duration::from_secs(5);
 /// TTL per il listing delle directory
 pub const DIRECTORY_CACHE_TTL: Duration = Duration::from_secs(3);
 /// TTL per i dati dei file (chunk)
-pub const DATA_CACHE_TTL: Duration = Duration::from_secs(30);
+pub const DATA_CACHE_TTL: Duration = Duration::from_secs(10);
 
 // ─── Wrapper generico con TTL ────────────────────────────────────────
 
@@ -99,33 +99,47 @@ impl CacheManager {
 
     // ── Directory cache ──────────────────────────────────────────────
 
+    /// Restituisce il listing directory solo se presente in cache e valido.
+    ///
+    /// Non effettua chiamate remote.
+    pub fn get_cached_directory(&mut self, path: &str) -> Option<Vec<FileEntry>> {
+        if let Some(dir_cache) = self.directory_cache.get(path) {
+            if !dir_cache.entries.is_expired() {
+                log::debug!("Directory cache HIT for {}", path);
+                return Some(dir_cache.entries.data.clone());
+            }
+            log::debug!("Directory cache EXPIRED for {}", path);
+        }
+
+        self.directory_cache.remove(path);
+        None
+    }
+
+    /// Salva il listing di una directory in cache.
+    pub fn store_directory_listing(&mut self, path: &str, entries: Vec<FileEntry>) {
+        self.directory_cache.insert(
+            path.to_string(),
+            DirectoryCache {
+                entries: CachedEntry::new(entries, DIRECTORY_CACHE_TTL),
+            },
+        );
+    }
+
     /// Ottiene il listing di una directory dalla cache o dal server.
     pub fn list_directory_cached(
         &mut self,
         path: &str,
         api_client: &ApiClient,
     ) -> Result<Vec<FileEntry>, ApiError> {
-        // Controlla la cache
-        if let Some(dir_cache) = self.directory_cache.get(path) {
-            if !dir_cache.entries.is_expired() {
-                log::debug!("Directory cache HIT for {}", path);
-                return Ok(dir_cache.entries.data.clone());
-            } else {
-                log::debug!("Directory cache EXPIRED for {}", path);
-            }
+        if let Some(entries) = self.get_cached_directory(path) {
+            return Ok(entries);
         }
 
         // Cache miss o expired — fetch dal server
         log::debug!("Directory cache MISS for {}", path);
         let entries = api_client.list_directory(path)?;
 
-        // Salva in cache
-        self.directory_cache.insert(
-            path.to_string(),
-            DirectoryCache {
-                entries: CachedEntry::new(entries.clone(), DIRECTORY_CACHE_TTL),
-            },
-        );
+        self.store_directory_listing(path, entries.clone());
 
         Ok(entries)
     }
@@ -147,6 +161,37 @@ impl CacheManager {
 
     // ── File data cache ──────────────────────────────────────────────
 
+    /// Legge dati solo dalla cache locale (nessun I/O remoto).
+    pub fn read_from_cache(&mut self, path: &str, offset: u64, size: u32) -> Option<Vec<u8>> {
+        let chunk_start = (offset / CHUNK_SIZE as u64) * CHUNK_SIZE as u64;
+
+        if let Some(file_cache) = self.file_cache.get_mut(path) {
+            if let Some(cached_chunk) = file_cache.chunks.get_mut(&chunk_start) {
+                if !cached_chunk.is_expired() {
+                    cached_chunk.last_access = SystemTime::now();
+                    let chunk_offset = (offset - chunk_start) as usize;
+                    let chunk_end = (chunk_offset + size as usize).min(cached_chunk.data.len());
+
+                    log::debug!("Cache HIT for {} at offset {} (TTL valid)", path, offset);
+                    return Some(cached_chunk.data[chunk_offset..chunk_end].to_vec());
+                }
+
+                let removed = file_cache.chunks.remove(&chunk_start);
+                if let Some(chunk) = removed {
+                    file_cache.total_size -= chunk.data.len();
+                    log::debug!("Cache EXPIRED for {} at offset {}", path, offset);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Salva un chunk letto dal server nella cache locale.
+    pub fn store_file_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) {
+        self.store_chunk(path, offset, data);
+    }
+
     /// Legge dati di un file dalla cache o dal server, usando range requests.
     pub fn read_with_cache(
         &mut self,
@@ -157,24 +202,8 @@ impl CacheManager {
     ) -> Result<Vec<u8>, ApiError> {
         let chunk_start = (offset / CHUNK_SIZE as u64) * CHUNK_SIZE as u64;
 
-        // Controlla la cache
-        if let Some(file_cache) = self.file_cache.get_mut(path) {
-            if let Some(cached_chunk) = file_cache.chunks.get_mut(&chunk_start) {
-                if !cached_chunk.is_expired() {
-                    cached_chunk.last_access = SystemTime::now();
-                    let chunk_offset = (offset - chunk_start) as usize;
-                    let chunk_end = (chunk_offset + size as usize).min(cached_chunk.data.len());
-
-                    log::debug!("Cache HIT for {} at offset {} (TTL valid)", path, offset);
-                    return Ok(cached_chunk.data[chunk_offset..chunk_end].to_vec());
-                } else {
-                    let removed = file_cache.chunks.remove(&chunk_start);
-                    if let Some(chunk) = removed {
-                        file_cache.total_size -= chunk.data.len();
-                        log::debug!("Cache EXPIRED for {} at offset {}", path, offset);
-                    }
-                }
-            }
+        if let Some(data) = self.read_from_cache(path, offset, size) {
+            return Ok(data);
         }
 
         // Cache miss — fetch dal server
@@ -182,7 +211,7 @@ impl CacheManager {
         let chunk_data = api_client.read_file_chunk(path, chunk_start, CHUNK_SIZE)?;
 
         // Salva in cache
-        self.store_chunk(path, chunk_start, chunk_data.clone());
+        self.store_file_chunk(path, chunk_start, chunk_data.clone());
 
         // Estrai la porzione richiesta
         let chunk_offset = (offset - chunk_start) as usize;
@@ -230,6 +259,10 @@ impl CacheManager {
 
         // Aggiungi il nuovo chunk
         let chunk_size = data.len();
+        if let Some(previous) = file_cache.chunks.remove(&offset) {
+            file_cache.total_size = file_cache.total_size.saturating_sub(previous.data.len());
+        }
+
         file_cache.chunks.insert(offset, CachedChunk {
             data,
             offset,

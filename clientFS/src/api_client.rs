@@ -41,7 +41,7 @@ impl ApiClient {
     /// * `runtime` - Handle al runtime Tokio per eseguire future async
     pub fn new(base_url: String, token: String, runtime: tokio::runtime::Handle) -> Result<Self> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(5))
             .build()
             .context("Failed to create HTTP client")?;
 
@@ -56,7 +56,11 @@ impl ApiClient {
     /// Esegue un future async bloccando il thread corrente.
     /// Usa `block_in_place` per permettere l'uso anche dall'interno di un runtime Tokio.
     fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
-        tokio::task::block_in_place(|| self.runtime.block_on(future))
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
+        } else {
+            self.runtime.block_on(future)
+        }
     }
 
     // ── Operazioni sul filesystem ────────────────────────────────────
@@ -105,8 +109,15 @@ impl ApiClient {
 
     /// Legge un chunk di un file usando HTTP Range requests.
     pub fn read_file_chunk(&self, path: &str, offset: u64, size: u32) -> Result<Vec<u8>, ApiError> {
+        if size == 0 {
+            log::debug!("read_file_chunk called with size=0 for {}, returning empty", path);
+            return Ok(Vec::new());
+        }
+
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
-        let end = offset + size as u64 - 1;
+        let end = offset
+            .checked_add(size as u64 - 1)
+            .ok_or_else(|| ApiError::io_error("read_file_chunk", "Invalid range overflow"))?;
 
         log::debug!("Reading file chunk: {} (offset={}, size={})", url, offset, size);
 
@@ -161,7 +172,14 @@ impl ApiClient {
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Writing file chunk: {} (offset={}, size={})", url, offset, data.len());
 
-        let end = offset + data.len() as u64 - 1;
+        if data.is_empty() {
+            log::debug!("write_file_chunk called with empty payload for {}, nothing to write", path);
+            return Ok(());
+        }
+
+        let end = offset
+            .checked_add(data.len() as u64 - 1)
+            .ok_or_else(|| ApiError::io_error("write_file_chunk", "Invalid range overflow"))?;
         let response = self.block_on(
             self.authorized(
                 self.client.patch(&url)
@@ -189,7 +207,14 @@ impl ApiClient {
     fn write_file_chunk_fallback(&self, path: &str, offset: u64, data: &[u8]) -> Result<(), ApiError> {
         log::warn!("Using inefficient read-modify-write for {}", path);
 
-        let mut file_data = self.read_file(path).unwrap_or_else(|_| Vec::new());
+        let mut file_data = match self.read_file(path) {
+            Ok(existing) => existing,
+            Err(err) if err.errno == libc::ENOENT => Vec::new(),
+            Err(err) => {
+                log::warn!("Fallback read failed for {}: {}", path, err);
+                return Err(err);
+            }
+        };
 
         let end_offset = (offset as usize) + data.len();
         if end_offset > file_data.len() {

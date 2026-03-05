@@ -1,7 +1,7 @@
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use std::path::{Path, PathBuf, Component};
 use std::fs;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, ErrorKind};
 use serde::{Serialize, Deserialize};
 use actix_web::http::header::{HeaderName, HeaderValue};
 use futures_util::StreamExt;
@@ -44,6 +44,16 @@ pub struct ApiResponse {
 pub struct RenameRequest {
     pub from: String,
     pub to: String,
+}
+
+fn fs_error_json(err: &std::io::Error, message: &'static str) -> HttpResponse {
+    match err.kind() {
+        ErrorKind::NotFound => HttpResponse::NotFound().json(message),
+        ErrorKind::AlreadyExists => HttpResponse::Conflict().json(message),
+        ErrorKind::PermissionDenied => HttpResponse::Forbidden().json(message),
+        ErrorKind::DirectoryNotEmpty => HttpResponse::Conflict().json(message),
+        _ => HttpResponse::InternalServerError().json(message),
+    }
 }
 
 // Helper function per ottenere il path sicuro
@@ -204,8 +214,8 @@ pub async fn write_file(
 
     // Crea le directory parent se necessarie
     if let Some(parent) = full_path.parent() {
-        if let Err(_) = fs::create_dir_all(parent) {
-            return Ok(HttpResponse::InternalServerError().json("Failed to create directories"));
+        if let Err(e) = fs::create_dir_all(parent) {
+            return Ok(fs_error_json(&e, "Failed to create directories"));
         }
     }
 
@@ -220,7 +230,7 @@ pub async fn write_file(
             file.flush().await.map_err(actix_web::error::ErrorInternalServerError)?;
             Ok(HttpResponse::Ok().json(ApiResponse { success: true, message: None, bytes_written: Some(total) }))
         }
-        Err(_) => Ok(HttpResponse::InternalServerError().json("Failed to write file")),
+        Err(e) => Ok(fs_error_json(&e, "Failed to write file")),
     }
 }
 
@@ -263,39 +273,48 @@ pub async fn patch_file(
         return Ok(HttpResponse::BadRequest().json("End < start"));
     }
 
+    let expected_len = end - start + 1;
+
     // Crea directory parent se necessario
     if let Some(parent) = full_path.parent() {
-        if let Err(_) = fs::create_dir_all(parent) {
-            return Ok(HttpResponse::InternalServerError().json("Failed to create parent directories"));
+        if let Err(e) = fs::create_dir_all(parent) {
+            return Ok(fs_error_json(&e, "Failed to create parent directories"));
         }
     }
 
     // Apri/crea file in RW
     let mut file = match OpenOptions::new().read(true).write(true).create(true).open(&full_path) {
         Ok(f) => f,
-        Err(_) => return Ok(HttpResponse::InternalServerError().json("Failed to open file")),
+        Err(e) => return Ok(fs_error_json(&e, "Failed to open file")),
     };
 
     // Se end supera dimensione attuale, estende il file (creerà buchi se il FS lo supporta)
     let current_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     if end + 1 > current_len {
-        if let Err(_) = file.set_len(end + 1) { // end è inclusivo
-            return Ok(HttpResponse::InternalServerError().json("Failed to extend file"));
+        if let Err(e) = file.set_len(end + 1) { // end è inclusivo
+            return Ok(fs_error_json(&e, "Failed to extend file"));
         }
     }
 
     // Posiziona al punto di inizio
-    if let Err(_) = file.seek(SeekFrom::Start(start)) {
-        return Ok(HttpResponse::InternalServerError().json("Failed to seek"));
+    if let Err(e) = file.seek(SeekFrom::Start(start)) {
+        return Ok(fs_error_json(&e, "Failed to seek"));
     }
 
     let mut total: usize = 0;
     while let Some(chunk) = payload.next().await {
         let bytes = chunk.map_err(actix_web::error::ErrorBadRequest)?;
-        if let Err(_) = std::io::Write::write_all(&mut file, &bytes) {
-            return Ok(HttpResponse::InternalServerError().json("Failed to write chunk"));
+        if (total as u64) + (bytes.len() as u64) > expected_len {
+            return Ok(HttpResponse::BadRequest().json("Payload larger than Content-Range"));
+        }
+        if let Err(e) = std::io::Write::write_all(&mut file, &bytes) {
+            return Ok(fs_error_json(&e, "Failed to write chunk"));
         }
         total += bytes.len();
+    }
+
+    if (total as u64) != expected_len {
+        return Ok(HttpResponse::BadRequest().json("Payload size does not match Content-Range"));
     }
 
     Ok(HttpResponse::Ok().json(ApiResponse { success: true, message: None, bytes_written: Some(total) }))
@@ -359,7 +378,7 @@ pub async fn create_directory(
             message: None,
             bytes_written: None,
         })),
-        Err(_) => Ok(HttpResponse::InternalServerError().json("Failed to create directory")),
+        Err(e) => Ok(fs_error_json(&e, "Failed to create directory")),
     }
 }
 
@@ -379,7 +398,7 @@ pub async fn delete_file(
     }
 
     let result = if full_path.is_dir() {
-        fs::remove_dir_all(&full_path)
+        fs::remove_dir(&full_path)
     } else {
         fs::remove_file(&full_path)
     };
@@ -390,7 +409,7 @@ pub async fn delete_file(
             message: None,
             bytes_written: None,
         })),
-        Err(_) => Ok(HttpResponse::InternalServerError().json("Failed to delete")),
+        Err(e) => Ok(fs_error_json(&e, "Failed to delete")),
     }
 }
 
@@ -413,14 +432,14 @@ pub async fn rename_entry(
     }
 
     if let Some(parent) = to.parent() {
-        if let Err(_) = fs::create_dir_all(parent) {
-            return Ok(HttpResponse::InternalServerError().json("Failed to prepare destination"));
+        if let Err(e) = fs::create_dir_all(parent) {
+            return Ok(fs_error_json(&e, "Failed to prepare destination"));
         }
     }
 
     match fs::rename(&from, &to) {
         Ok(_) => Ok(HttpResponse::Ok().json(ApiResponse { success: true, message: None, bytes_written: None })),
-        Err(_) => Ok(HttpResponse::InternalServerError().json("Failed to rename")),
+        Err(e) => Ok(fs_error_json(&e, "Failed to rename")),
     }
 }
 

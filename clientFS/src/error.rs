@@ -28,7 +28,13 @@ impl ApiError {
             404 => (libc::ENOENT, format!("{}: File or directory not found", operation)),
             405 => (libc::ENOSYS, format!("{}: Operation not supported", operation)),
             408 => (libc::ETIMEDOUT, format!("{}: Request timeout", operation)),
-            409 => (libc::EEXIST, format!("{}: Resource already exists", operation)),
+            409 => {
+                if operation == "delete" {
+                    (libc::ENOTEMPTY, format!("{}: Directory not empty", operation))
+                } else {
+                    (libc::EEXIST, format!("{}: Resource already exists", operation))
+                }
+            },
             413 => (libc::EFBIG, format!("{}: File too large", operation)),
             415 => (libc::EINVAL, format!("{}: Unsupported media type", operation)),
             429 => (libc::EAGAIN, format!("{}: Too many requests", operation)),
