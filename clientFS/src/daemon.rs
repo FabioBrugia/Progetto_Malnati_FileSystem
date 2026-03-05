@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use daemonize::Daemonize;
 use std::fs;
 use std::fs::File;
+#[cfg(target_os = "linux")]
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,8 +10,6 @@ use std::thread;
 use std::time::Duration;
 
 /// Controlla se un path è attualmente un mountpoint FUSE attivo.
-///
-/// Legge /proc/mounts e cerca una riga il cui mountpoint corrisponda al path dato.
 pub fn is_fuse_mounted(mountpoint: &Path) -> bool {
     let canonical = match fs::canonicalize(mountpoint) {
         Ok(p) => p,
@@ -18,19 +17,41 @@ pub fn is_fuse_mounted(mountpoint: &Path) -> bool {
     };
     let mount_str = canonical.to_string_lossy().to_string();
 
-    if let Ok(file) = fs::File::open("/proc/mounts") {
-        let reader = std::io::BufReader::new(file);
-        for line in reader.lines().flatten() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 && parts[1] == mount_str {
-                // Verifica che sia un mount FUSE
-                if parts[2].starts_with("fuse") || parts[0].contains("fuse") {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(file) = fs::File::open("/proc/mounts") {
+            let reader = std::io::BufReader::new(file);
+            for line in reader.lines().flatten() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 && parts[1] == mount_str {
+                    // Verifica che sia un mount FUSE
+                    if parts[2].starts_with("fuse") || parts[0].contains("fuse") {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = Command::new("mount").output() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let needle = format!(" on {} (", mount_str);
+            for line in stdout.lines() {
+                if line.contains(&needle) && line.to_lowercase().contains("fuse") {
                     return true;
                 }
             }
         }
+        return false;
     }
-    false
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        false
+    }
 }
 
 /// Smonta un mountpoint FUSE, con retry e fallback lazy-unmount.
@@ -41,44 +62,80 @@ pub fn unmount_fuse(mountpoint: &Path) -> Result<bool> {
         return Ok(false);
     }
 
-    // Primo tentativo: fusermount -u
-    let output = Command::new("fusermount")
-        .arg("-u")
-        .arg(mountpoint)
-        .output();
+    #[cfg(target_os = "linux")]
+    {
+        // Primo tentativo: fusermount -u
+        let output = Command::new("fusermount")
+            .arg("-u")
+            .arg(mountpoint)
+            .output();
 
-    if let Ok(out) = &output {
-        if out.status.success() {
-            // Attendi un attimo e verifica
-            thread::sleep(Duration::from_millis(200));
-            if !is_fuse_mounted(mountpoint) {
-                return Ok(true);
+        if let Ok(out) = &output {
+            if out.status.success() {
+                // Attendi un attimo e verifica
+                thread::sleep(Duration::from_millis(200));
+                if !is_fuse_mounted(mountpoint) {
+                    return Ok(true);
+                }
             }
         }
+
+        // Secondo tentativo: lazy unmount
+        let _ = Command::new("fusermount")
+            .arg("-uz")
+            .arg(mountpoint)
+            .output();
+
+        thread::sleep(Duration::from_millis(500));
+
+        if !is_fuse_mounted(mountpoint) {
+            return Ok(true);
+        }
+
+        // Terzo tentativo: sudo umount -l
+        let _ = Command::new("sudo")
+            .arg("umount")
+            .arg("-l")
+            .arg(mountpoint)
+            .output();
+
+        thread::sleep(Duration::from_millis(500));
+        return Ok(!is_fuse_mounted(mountpoint));
     }
 
-    // Secondo tentativo: lazy unmount
-    let _ = Command::new("fusermount")
-        .arg("-uz")
-        .arg(mountpoint)
-        .output();
+    #[cfg(target_os = "macos")]
+    {
+        // Primo tentativo: umount
+        let output = Command::new("umount").arg(mountpoint).output();
 
-    thread::sleep(Duration::from_millis(500));
+        if let Ok(out) = &output {
+            if out.status.success() {
+                thread::sleep(Duration::from_millis(200));
+                if !is_fuse_mounted(mountpoint) {
+                    return Ok(true);
+                }
+            }
+        }
 
-    if !is_fuse_mounted(mountpoint) {
-        return Ok(true);
+        // Secondo tentativo: force unmount
+        let _ = Command::new("umount").arg("-f").arg(mountpoint).output();
+
+        thread::sleep(Duration::from_millis(500));
+        return Ok(!is_fuse_mounted(mountpoint));
     }
 
-    // Terzo tentativo: sudo umount -l
-    let _ = Command::new("sudo")
-        .arg("umount")
-        .arg("-l")
-        .arg(mountpoint)
-        .output();
-
-    thread::sleep(Duration::from_millis(500));
-
-    Ok(!is_fuse_mounted(mountpoint))
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        // Fallback: tenta umount standard
+        let output = Command::new("umount").arg(mountpoint).output();
+        if let Ok(out) = &output {
+            if out.status.success() {
+                thread::sleep(Duration::from_millis(200));
+                return Ok(!is_fuse_mounted(mountpoint));
+            }
+        }
+        Ok(false)
+    }
 }
 
 /// Ferma il daemon in esecuzione.
@@ -214,9 +271,20 @@ pub fn ensure_mountpoint(dir: &PathBuf) -> Result<()> {
                             "Mountpoint in stato 'Transport endpoint not connected' (ENOTCONN). \
                              Provo smontaggio forzato..."
                         );
-                        let _ = Command::new("fusermount").arg("-u").arg(dir).output();
-                        let _ = Command::new("fusermount").arg("-uz").arg(dir).output();
-                        let _ = Command::new("sudo").arg("umount").arg("-l").arg(dir).output();
+
+                        #[cfg(target_os = "linux")]
+                        {
+                            let _ = Command::new("fusermount").arg("-u").arg(dir).output();
+                            let _ = Command::new("fusermount").arg("-uz").arg(dir).output();
+                            let _ = Command::new("sudo").arg("umount").arg("-l").arg(dir).output();
+                        }
+
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = Command::new("umount").arg(dir).output();
+                            let _ = Command::new("umount").arg("-f").arg(dir).output();
+                        }
+
                         // Attendi e riprova
                         thread::sleep(Duration::from_millis(500));
                         // Se ancora in stato zombie, prova a rimuovere

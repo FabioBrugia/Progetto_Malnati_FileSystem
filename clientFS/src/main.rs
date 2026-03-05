@@ -57,10 +57,16 @@ async fn main() -> Result<()> {
 
     // Crea e monta il filesystem
     let fs = RemoteFS::new(api_client);
-    let mount_str = args.mountpoint.to_str().unwrap().to_string();
+
+    #[cfg(target_os = "linux")]
+    let unmount_hint = format!("fusermount -u {}", args.mountpoint.display());
+    #[cfg(target_os = "macos")]
+    let unmount_hint = format!("umount {}", args.mountpoint.display());
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let unmount_hint = format!("umount {}", args.mountpoint.display());
 
     log::info!("Mounting filesystem...");
-    log::info!("Use Ctrl+C or 'fusermount -u {}' to unmount", args.mountpoint.display());
+    log::info!("Use Ctrl+C or '{}' to unmount", unmount_hint);
 
     // Condividiamo l'unmounter per il graceful shutdown
     let unmounter: Arc<Mutex<Option<fuser::SessionUnmounter>>> = Arc::new(Mutex::new(None));
@@ -68,28 +74,46 @@ async fn main() -> Result<()> {
 
     // Registra il signal handler per SIGINT (Ctrl+C) e SIGTERM
     let mount_display = args.mountpoint.display().to_string();
+    let mountpoint_for_signal = args.mountpoint.clone();
     let pidfile_for_signal = args.pidfile.clone();
     let is_daemon = args.daemon;
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("Failed to register SIGTERM handler");
 
-        tokio::select! {
-            _ = ctrl_c => {
-                log::info!("Ricevuto SIGINT (Ctrl+C). Smontaggio in corso...");
+        #[cfg(unix)]
+        {
+            let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("Failed to register SIGTERM handler");
+
+            tokio::select! {
+                _ = ctrl_c => {
+                    log::info!("Ricevuto SIGINT (Ctrl+C). Smontaggio in corso...");
+                }
+                _ = sigterm.recv() => {
+                    log::info!("Ricevuto SIGTERM. Smontaggio in corso...");
+                }
             }
-            _ = sigterm.recv() => {
-                log::info!("Ricevuto SIGTERM. Smontaggio in corso...");
-            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = ctrl_c.await;
+            log::info!("Ricevuto segnale di terminazione (Ctrl+C). Smontaggio in corso...");
         }
 
         // Esegui l'unmount
         if let Ok(mut guard) = unmounter_for_signal.lock() {
             if let Some(ref mut u) = *guard {
-                log::info!("Smontaggio filesystem da {}...", mount_display);
-                if let Err(e) = u.unmount() {
-                    log::error!("Errore durante lo smontaggio: {}", e);
+                if daemon::is_fuse_mounted(&mountpoint_for_signal) {
+                    log::info!("Smontaggio filesystem da {}...", mount_display);
+                    if let Err(e) = u.unmount() {
+                        log::error!("Errore durante lo smontaggio: {}", e);
+                    }
+                } else {
+                    log::info!(
+                        "Mountpoint {} non risulta montato, salto lo smontaggio.",
+                        mount_display
+                    );
                 }
             }
         }
@@ -103,8 +127,9 @@ async fn main() -> Result<()> {
 
     // fuser::Session::run() blocca il thread — lo eseguiamo in spawn_blocking
     let unmounter_for_mount = unmounter.clone();
+    let mountpoint_for_mount = args.mountpoint.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        fs.mount(&mount_str, unmounter_for_mount)
+        fs.mount(&mountpoint_for_mount, unmounter_for_mount)
             .context("Failed to mount filesystem")
     })
     .await

@@ -274,17 +274,28 @@ impl RemoteFS {
     /// La funzione blocca finché la sessione FUSE non viene terminata.
     pub fn mount(
         self,
-        mountpoint: &str,
+        mountpoint: &Path,
         unmounter_slot: Arc<Mutex<Option<SessionUnmounter>>>,
     ) -> anyhow::Result<()> {
-        let options = vec![
-            MountOption::RW,
-            MountOption::FSName("remotefs".to_string()),
+        let mut options = vec![
+            MountOption::FSName("remoteFS".to_string()),
+            MountOption::AutoUnmount,
         ];
 
-        log::info!("Mounting filesystem at {}", mountpoint);
+        #[cfg(target_os = "linux")]
+        {
+            options.push(MountOption::AllowOther);
+            options.push(MountOption::DefaultPermissions);
+        }
 
-        let mut session = Session::new(self, Path::new(mountpoint), &options)
+        #[cfg(target_os = "macos")]
+        {
+            options.push(MountOption::RW);
+        }
+
+        log::info!("Mounting filesystem at {}", mountpoint.display());
+
+        let mut session = Session::new(self, mountpoint, &options)
             .map_err(|e| anyhow::anyhow!("Failed to create FUSE session: {}", e))?;
 
         // Salva l'unmounter PRIMA di avviare il loop, così il signal handler
@@ -371,20 +382,20 @@ impl Filesystem for RemoteFS {
             }
         };
 
-        let entries = if let Some(cached_entries) = self
+        let cached_entries = self
             .cache
-            .lock()
-            .unwrap()
-            .get_cached_directory(&parent_path)
-        {
+            .try_lock()
+            .ok()
+            .and_then(|mut cache| cache.get_cached_directory(&parent_path));
+
+        let entries = if let Some(cached_entries) = cached_entries {
             cached_entries
         } else {
             match self.api_client.list_directory(&parent_path) {
                 Ok(fresh_entries) => {
-                    self.cache
-                        .lock()
-                        .unwrap()
-                        .store_directory_listing(&parent_path, fresh_entries.clone());
+                    if let Ok(mut cache) = self.cache.try_lock() {
+                        cache.store_directory_listing(&parent_path, fresh_entries.clone());
+                    }
                     fresh_entries
                 }
                 Err(e) => {
@@ -421,7 +432,9 @@ impl Filesystem for RemoteFS {
 
         // Pulizia cache periodica sulla root
         if ino == 1 {
-            self.cache.lock().unwrap().cleanup_expired();
+            if let Ok(mut cache) = self.cache.try_lock() {
+                cache.cleanup_expired();
+            }
         }
 
         match self.inode_table.read().unwrap().get_cloned(ino) {
@@ -535,16 +548,20 @@ impl Filesystem for RemoteFS {
             }
         };
 
-        let entries = if let Some(cached_entries) = self.cache.lock().unwrap().get_cached_directory(&inode.path)
-        {
+        let cached_entries = self
+            .cache
+            .try_lock()
+            .ok()
+            .and_then(|mut cache| cache.get_cached_directory(&inode.path));
+
+        let entries = if let Some(cached_entries) = cached_entries {
             cached_entries
         } else {
             match self.api_client.list_directory(&inode.path) {
                 Ok(fresh_entries) => {
-                    self.cache
-                        .lock()
-                        .unwrap()
-                        .store_directory_listing(&inode.path, fresh_entries.clone());
+                    if let Ok(mut cache) = self.cache.try_lock() {
+                        cache.store_directory_listing(&inode.path, fresh_entries.clone());
+                    }
                     fresh_entries
                 }
                 Err(e) => {
@@ -654,12 +671,13 @@ impl Filesystem for RemoteFS {
         }
 
         let offset_u64 = offset as u64;
-        if let Some(cached_data) = self
+        let cached_data = self
             .cache
-            .lock()
-            .unwrap()
-            .read_from_cache(&inode.path, offset_u64, size)
-        {
+            .try_lock()
+            .ok()
+            .and_then(|mut cache| cache.read_from_cache(&inode.path, offset_u64, size));
+
+        if let Some(cached_data) = cached_data {
             reply.data(&cached_data);
             return;
         }
@@ -667,10 +685,9 @@ impl Filesystem for RemoteFS {
         let chunk_start = (offset_u64 / CHUNK_SIZE as u64) * CHUNK_SIZE as u64;
         match self.api_client.read_file_chunk(&inode.path, chunk_start, CHUNK_SIZE) {
             Ok(chunk_data) => {
-                self.cache
-                    .lock()
-                    .unwrap()
-                    .store_file_chunk(&inode.path, chunk_start, chunk_data.clone());
+                if let Ok(mut cache) = self.cache.try_lock() {
+                    cache.store_file_chunk(&inode.path, chunk_start, chunk_data.clone());
+                }
 
                 let chunk_offset = (offset_u64 - chunk_start) as usize;
                 let chunk_end = (chunk_offset + size as usize).min(chunk_data.len());
