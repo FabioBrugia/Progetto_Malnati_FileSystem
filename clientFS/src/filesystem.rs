@@ -36,19 +36,25 @@ impl INode {
 
 // ─── Inode Table ─────────────────────────────────────────────────────
 
-/// Tabella degli inode: gestisce il mapping path ↔ inode number.
+/// Tabella degli inode: gestisce il mapping path ↔ inode number livello di cash.
 struct InodeTable {
     inodes: HashMap<u64, INode>,
     path_to_ino: HashMap<String, u64>,
     next_ino: u64,
+    /// UID dell'utente che ha montato il filesystem
+    uid: u32,
+    /// GID dell'utente che ha montato il filesystem
+    gid: u32,
 }
 
 impl InodeTable {
-    fn new() -> Self {
+    fn new(uid: u32, gid: u32) -> Self {
         let mut table = Self {
             inodes: HashMap::new(),
             path_to_ino: HashMap::new(),
             next_ino: 2,
+            uid,
+            gid,
         };
 
         // Crea l'inode root (ino=1)
@@ -63,8 +69,8 @@ impl InodeTable {
             kind: FileType::Directory,
             perm: 0o755,
             nlink: 2,
-            uid: 501,
-            gid: 20,
+            uid,
+            gid,
             rdev: 0,
             flags: 0,
             blksize: 512,
@@ -99,9 +105,19 @@ impl InodeTable {
         let ino = self.next_ino;
         self.next_ino += 1;
 
-        // Forza permessi permissivi: 0o777 per directory, 0o666 per file
-        // Ignoriamo i permessi restrittivi del server per permettere accesso completo
-        let perm = if entry.is_dir { 0o777 } else { 0o666 };
+        // Usa i permessi dal server, garantendo almeno rw per owner
+        // Se il server non fornisce un mode valido, fallback a 0o755 (dir) o 0o644 (file)
+        let server_perm = (entry.mode & 0o777) as u16;
+        let perm = if server_perm == 0 {
+            if entry.is_dir { 0o755 } else { 0o644 }
+        } else {
+            // Assicura che l'owner abbia sempre almeno rw (file) o rwx (dir)
+            if entry.is_dir {
+                server_perm | 0o700
+            } else {
+                server_perm | 0o600
+            }
+        };
 
         let attr = FileAttr {
             ino,
@@ -112,10 +128,10 @@ impl InodeTable {
             ctime: UNIX_EPOCH + Duration::from_secs_f64(entry.ctime),
             crtime: UNIX_EPOCH + Duration::from_secs_f64(entry.ctime),
             kind: if entry.is_dir { FileType::Directory } else { FileType::RegularFile },
-            perm: perm as u16,
+            perm,
             nlink: if entry.is_dir { 2 } else { 1 },
-            uid: 501,
-            gid: 20,
+            uid: self.uid,
+            gid: self.gid,
             rdev: 0,
             flags: 0,
             blksize: 512,
@@ -255,9 +271,12 @@ pub struct RemoteFS {
 
 impl RemoteFS {
     pub fn new(api_client: ApiClient) -> Self {
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+
         Self {
             api_client: Arc::new(api_client),
-            inode_table: Arc::new(RwLock::new(InodeTable::new())),
+            inode_table: Arc::new(RwLock::new(InodeTable::new(uid, gid))),
             file_handles: Arc::new(Mutex::new(FileHandleTable::new())),
             cache: Arc::new(Mutex::new(CacheManager::new())),
             path_locks: Arc::new(PathLockManager::new()),
@@ -288,8 +307,7 @@ impl RemoteFS {
         #[cfg(target_os = "linux")]
         {
             options.push(MountOption::AllowOther);
-            // NON aggiungere DefaultPermissions - permette accesso completo
-            // senza vincoli di permessi Unix
+            options.push(MountOption::DefaultPermissions);
         }
 
         #[cfg(target_os = "macos")]
@@ -799,9 +817,10 @@ impl Filesystem for RemoteFS {
             Ok(_) => {
                 self.cache.lock().unwrap().invalidate_directory_cache(&path);
 
-                // Utilizza il mode fornito da FUSE, o fallback a 0o777
-                // 0o777 permette accesso completo per owner, group e others
-                let dir_mode = if mode != 0 { mode & 0o777 } else { 0o777 };
+                // Utilizza il mode fornito da FUSE, o fallback a 0o755 (standard Unix per directory)
+                let dir_mode = if mode != 0 { mode & 0o777 } else { 0o755 };
+                // Assicura che l'owner abbia almeno rwx
+                let dir_mode = dir_mode | 0o700;
 
                 let entry = FileEntry {
                     name: name.to_string_lossy().to_string(),
@@ -981,9 +1000,10 @@ impl Filesystem for RemoteFS {
             Ok(_) => {
                 self.cache.lock().unwrap().invalidate_directory_cache(&path);
 
-                // Utilizza il mode fornito da FUSE, o fallback a 0o666
-                // 0o666 permette la lettura e la scrittura per owner, group e others
-                let file_mode = if mode != 0 { mode & 0o777 } else { 0o666 };
+                // Utilizza il mode fornito da FUSE, o fallback a 0o644 (standard Unix per file)
+                let file_mode = if mode != 0 { mode & 0o777 } else { 0o644 };
+                // Assicura che l'owner abbia almeno rw
+                let file_mode = file_mode | 0o600;
 
                 let entry = FileEntry {
                     name: name.to_string_lossy().to_string(),
