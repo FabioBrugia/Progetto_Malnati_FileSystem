@@ -21,6 +21,11 @@ struct ListResponse {
     entries: Vec<FileEntry>,
 }
 
+#[derive(Serialize)]
+struct SetAttrsRequest {
+    mode: Option<u32>,
+}
+
 /// Client HTTP asincrono per comunicare con il server di storage.
 ///
 /// Utilizza `reqwest` async internamente, ma espone metodi sincroni
@@ -285,6 +290,26 @@ impl ApiClient {
         if !status.is_success() {
             log::warn!("rename failed ({} -> {}): HTTP {}", from, to, status);
             return Err(ApiError::from_status(status, "rename"));
+        }
+
+        Ok(())
+    }
+
+    /// Imposta gli attributi (attualmente solo i permessi) di un file sul server.
+    pub fn set_attrs(&self, path: &str, mode: Option<u32>) -> Result<(), ApiError> {
+        let url = format!("{}/attrs/{}", self.base_url, path.trim_start_matches('/'));
+        log::debug!("Setting attrs for {}: mode={:?}", url, mode);
+
+        let request_body = SetAttrsRequest { mode };
+
+        let response = self.block_on(
+            self.authorized(self.client.patch(&url).json(&request_body)).send()
+        ).map_err(|e| ApiError::from_network_error("set_attrs", &e))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            log::warn!("set_attrs failed for {}: HTTP {}", path, status);
+            return Err(ApiError::from_status(status, "set_attrs"));
         }
 
         Ok(())
