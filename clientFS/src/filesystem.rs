@@ -86,7 +86,7 @@ impl InodeTable {
     /// Ottiene o crea un inode per il path dato, aggiornando i metadati.
     fn get_or_create(&mut self, path: &str, entry: &FileEntry) -> u64 {
         if let Some(&ino) = self.path_to_ino.get(path) {
-            // Aggiorna l'inode esistente con i nuovi metadati (refresh)
+            // Aggiorna l'inode esistente con i nuovi metadati
             if let Some(inode) = self.inodes.get_mut(&ino) {
                 inode.attr.size = entry.size;
                 inode.attr.mtime = UNIX_EPOCH + Duration::from_secs_f64(entry.mtime);
@@ -99,6 +99,10 @@ impl InodeTable {
         let ino = self.next_ino;
         self.next_ino += 1;
 
+        // Forza permessi permissivi: 0o777 per directory, 0o666 per file
+        // Ignoriamo i permessi restrittivi del server per permettere accesso completo
+        let perm = if entry.is_dir { 0o777 } else { 0o666 };
+
         let attr = FileAttr {
             ino,
             size: entry.size,
@@ -108,7 +112,7 @@ impl InodeTable {
             ctime: UNIX_EPOCH + Duration::from_secs_f64(entry.ctime),
             crtime: UNIX_EPOCH + Duration::from_secs_f64(entry.ctime),
             kind: if entry.is_dir { FileType::Directory } else { FileType::RegularFile },
-            perm: (entry.mode & 0o777) as u16,
+            perm: perm as u16,
             nlink: if entry.is_dir { 2 } else { 1 },
             uid: 501,
             gid: 20,
@@ -172,7 +176,7 @@ impl InodeTable {
         }
     }
 
-    /// Invalida i metadati di un inode (forza refresh al prossimo accesso).
+    /// Invalida i metadati di un inode.
     fn invalidate_metadata(&mut self, path: &str) {
         if let Some(&ino) = self.path_to_ino.get(path) {
             if let Some(inode) = self.inodes.get_mut(&ino) {
@@ -268,9 +272,8 @@ impl RemoteFS {
 
     /// Monta il filesystem al mountpoint specificato.
     ///
-    /// Salva un `SessionUnmounter` nell'`Arc<Mutex>` fornito **prima** di
-    /// avviare il loop FUSE, così un signal handler può smontare il
-    /// filesystem in modo pulito (graceful shutdown).
+    /// Salva un `SessionUnmounter` prima di
+    /// avviare il loop FUSE, così un signal handler può smontare il filesystem in modo pulito.
     /// La funzione blocca finché la sessione FUSE non viene terminata.
     pub fn mount(
         self,
@@ -285,7 +288,8 @@ impl RemoteFS {
         #[cfg(target_os = "linux")]
         {
             options.push(MountOption::AllowOther);
-            options.push(MountOption::DefaultPermissions);
+            // NON aggiungere DefaultPermissions - permette accesso completo
+            // senza vincoli di permessi Unix
         }
 
         #[cfg(target_os = "macos")]
@@ -306,7 +310,7 @@ impl RemoteFS {
         }
         log::info!("SessionUnmounter pronto per il graceful shutdown");
 
-        // Esegue il loop della sessione FUSE (bloccante)
+        // Esegue il loop della sessione FUSE
         session.run()
             .map_err(|e| anyhow::anyhow!("FUSE session error: {}", e))?;
 
@@ -774,11 +778,11 @@ impl Filesystem for RemoteFS {
         _req: &Request<'_>,
         parent: u64,
         name: &OsStr,
-        _mode: u32,
+        mode: u32,
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        log::debug!("mkdir(parent={}, name={:?})", parent, name);
+        log::debug!("mkdir(parent={}, name={:?}, mode={:o})", parent, name, mode);
 
         let path = match self.inode_table.read().unwrap().child_path(parent, name) {
             Some(p) => p,
@@ -795,13 +799,17 @@ impl Filesystem for RemoteFS {
             Ok(_) => {
                 self.cache.lock().unwrap().invalidate_directory_cache(&path);
 
+                // Utilizza il mode fornito da FUSE, o fallback a 0o777
+                // 0o777 permette accesso completo per owner, group e others
+                let dir_mode = if mode != 0 { mode & 0o777 } else { 0o777 };
+
                 let entry = FileEntry {
                     name: name.to_string_lossy().to_string(),
                     is_dir: true,
                     size: 0,
                     mtime: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64(),
                     ctime: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64(),
-                    mode: 0o755,
+                    mode: dir_mode,
                 };
 
                 let ino = self.inode_table.write().unwrap().get_or_create(&path, &entry);
@@ -951,12 +959,12 @@ impl Filesystem for RemoteFS {
         _req: &Request<'_>,
         parent: u64,
         name: &OsStr,
-        _mode: u32,
+        mode: u32,
         _umask: u32,
         _flags: i32,
         reply: ReplyCreate,
     ) {
-        log::debug!("create(parent={}, name={:?})", parent, name);
+        log::debug!("create(parent={}, name={:?}, mode={:o})", parent, name, mode);
 
         let path = match self.inode_table.read().unwrap().child_path(parent, name) {
             Some(p) => p,
@@ -973,13 +981,17 @@ impl Filesystem for RemoteFS {
             Ok(_) => {
                 self.cache.lock().unwrap().invalidate_directory_cache(&path);
 
+                // Utilizza il mode fornito da FUSE, o fallback a 0o666
+                // 0o666 permette la lettura e la scrittura per owner, group e others
+                let file_mode = if mode != 0 { mode & 0o777 } else { 0o666 };
+
                 let entry = FileEntry {
                     name: name.to_string_lossy().to_string(),
                     is_dir: false,
                     size: 0,
                     mtime: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64(),
                     ctime: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64(),
-                    mode: 0o644,
+                    mode: file_mode,
                 };
 
                 let ino = self.inode_table.write().unwrap().get_or_create(&path, &entry);

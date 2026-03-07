@@ -241,7 +241,7 @@ impl CacheManager {
             }
         }
 
-        // Evizione LRU se la cache è troppo grande
+        // evitare LRU se la cache è troppo grande
         while file_cache.total_size + data.len() > MAX_CACHE_SIZE && !file_cache.chunks.is_empty() {
             if let Some((&oldest_offset, _)) = file_cache
                 .chunks
@@ -298,7 +298,7 @@ impl CacheManager {
 
     /// Pulisce tutte le entry scadute dalle cache.
     ///
-    /// Deve essere chiamato periodicamente (es. ad ogni getattr sulla root).
+    /// Deve essere chiamato periodFileEntryicamente (es. ad ogni getattr sulla root).
     pub fn cleanup_expired(&mut self) {
         // Pulisci directory cache
         self.directory_cache.retain(|path, dir_cache| {
