@@ -86,6 +86,7 @@ async fn main() -> std::io::Result<()> {
             .route("/mkdir/{path:.*}", web::post().to(handlers::create_directory))
             .route("/files/{path:.*}", web::delete().to(handlers::delete_file))
             .route("/rename", web::post().to(handlers::rename_entry))
+            .route("/attrs/{path:.*}", web::patch().to(handlers::set_attrs))
             .route("/health", web::get().to(handlers::health))
     })
     .bind("0.0.0.0:8080")?

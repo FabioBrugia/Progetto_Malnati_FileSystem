@@ -513,13 +513,31 @@ impl Filesystem for RemoteFS {
             }
         }
 
-        // Handle mode (permissions) change
+        // Handle mode (permissions) change — WRITE-THROUGH to server
         if let Some(new_mode) = mode {
-            let mut table = self.inode_table.write().unwrap();
-            if let Some(node) = table.get_mut(ino) {
-                node.attr.perm = (new_mode & 0o777) as u16;
-                node.attr.ctime = SystemTime::now();
-                node.cached_at = Instant::now();
+            match self.api_client.set_attrs(&inode.path, Some(new_mode & 0o777)) {
+                Ok(_) => {
+                    // Invalida tutte le cache associate a questo path per garantire
+                    // consistenza tra metadati locali e stato remoto.
+                    self.invalidate_all_for_path(&inode.path);
+
+                    let mut table = self.inode_table.write().unwrap();
+                    if let Some(node) = table.get_mut(ino) {
+                        node.attr.perm = (new_mode & 0o777) as u16;
+                        node.attr.ctime = SystemTime::now();
+                        node.cached_at = Instant::now();
+                    }
+                    log::info!(
+                        "Write-through: updated permissions for {} to {:o}",
+                        inode.path,
+                        new_mode & 0o777
+                    );
+                }
+                Err(e) => {
+                    log::error!("Failed to set attrs for {}: {}", inode.path, e);
+                    reply.error(e.errno);
+                    return;
+                }
             }
         }
 

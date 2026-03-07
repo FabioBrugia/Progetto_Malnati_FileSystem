@@ -46,6 +46,11 @@ pub struct RenameRequest {
     pub to: String,
 }
 
+#[derive(Deserialize)]
+pub struct SetAttrsRequest {
+    pub mode: Option<u32>,
+}
+
 fn fs_error_json(err: &std::io::Error, message: &'static str) -> HttpResponse {
     match err.kind() {
         ErrorKind::NotFound => HttpResponse::NotFound().json(message),
@@ -447,6 +452,41 @@ pub async fn health() -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(ApiResponse {
         success: true,
         message: Some("ok".to_string()),
+        bytes_written: None,
+    }))
+}
+
+pub async fn set_attrs(
+    req: HttpRequest,
+    data: web::Data<AppState>,
+    payload: web::Json<SetAttrsRequest>,
+) -> Result<HttpResponse> {
+    let path = req.match_info().query("path");
+    let full_path = match get_safe_path(&data.base_dir, path) {
+        Some(p) => p,
+        None => return Ok(HttpResponse::BadRequest().json("Invalid path")),
+    };
+
+    if !full_path.exists() {
+        return Ok(HttpResponse::NotFound().json("File not found"));
+    }
+
+    if let Some(mode) = payload.mode {
+        match fs::metadata(&full_path) {
+            Ok(metadata) => {
+                let mut perms = metadata.permissions();
+                perms.set_mode(mode);
+                if let Err(e) = fs::set_permissions(&full_path, perms) {
+                    return Ok(fs_error_json(&e, "Failed to set permissions"));
+                }
+            }
+            Err(e) => return Ok(fs_error_json(&e, "Failed to read metadata")),
+        }
+    }
+
+    Ok(HttpResponse::Ok().json(ApiResponse {
+        success: true,
+        message: None,
         bytes_written: None,
     }))
 }
