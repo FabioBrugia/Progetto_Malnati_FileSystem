@@ -1,287 +1,312 @@
-# Remote File System (Rust)
+## Remote File System (Rust)
 
-Un filesystem remoto implementato in Rust che presenta un mount point locale, rispecchiando la struttura di un file system ospitato su un server remoto.
+Un filesystem remoto implementato in Rust che espone un **mount FUSE locale** e salva i dati su un **server REST**.  
+Permette di usare file e directory remoti come se fossero locali (ls, cat, echo, mkdir, mv, rm, chmod, ecc.).
 
-## Caratteristiche
+---
 
-- ✅ Interfaccia filesystem locale che interagisce con storage remoto
-- ✅ Operazioni standard sui file (lettura, scrittura, creazione, eliminazione, rinomina)
-- ✅ Supporto completo per Linux usando FUSE
-- ✅ Server RESTful implementato in Rust/Actix Web
-- ✅ Client FUSE implementato in Rust
-- ✅ **Mapping fine degli errori HTTP → POSIX** per messaggi di errore chiari e comportamento corretto
-- ✅ **Cache locale con scadenza (TTL)** per metadati, directory listing e dati file
-- ✅ **Politica write-through** con invalidazione automatica della cache su modifiche
-- ✅ **Modalità daemon** per esecuzione in background
-- ✅ **Recovery automatico mount point** da stati zombie (ENOTCONN)
-- ✅ Logging dettagliato con livelli di debug configurabili
+## 1. Funzionalità principali
 
-## Prerequisiti
+- **Filesystem locale FUSE**: mount di una directory (es. `/tmp/remotefs`) che rappresenta il filesystem remoto.
+- **Operazioni supportate**:
+  - Lettura/scrittura file
+  - Creazione ed eliminazione file
+  - Creazione ed eliminazione directory
+  - Rinomina/spostamento
+- **Server REST in Rust/Actix**:
+  - API per listare directory, leggere/scrivere file, creare/rimuovere, rinominare, cambiare permessi.
+- **Autenticazione JWT**:
+  - Il client chiede una password, chiama `/auth` e usa un token JWT in tutte le richieste.
+- **Cache locale con TTL**:
+  - Metadati, listing directory e chunk file con TTL + eviction LRU (10MB).
+- **Politica write-through**:
+  - Ogni modifica scrive **subito** sul server e invalida le cache correlate.
+- **Modalità daemon + graceful shutdown**:
+  - Possibilità di eseguire il client in background.
+  - Gestione di SIGINT/SIGTERM, unmount pulito, svuotamento cache e chiusura handle.
 
-### Per il server Rust:
+---
+
+## 2. Prerequisiti
+
+### 2.1. Toolchain Rust
+
+Serve Rust + Cargo:
+
 ```bash
-# Toolchain
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# (Opzionale) aggiorna
-rustup update
+rustup update    # opzionale ma consigliato
 ```
 
-### Per il client Rust:
-```bash
-# Rust toolchain
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+### 2.2. FUSE 3 + build tools (Linux)
 
-# FUSE library (Linux)
-sudo apt-get install fuse3 libfuse3-dev  # Debian/Ubuntu
-sudo dnf install fuse3 fuse3-devel       # Fedora
-sudo pacman -S fuse3                     # Arch Linux
-
-# Build tools
-sudo apt-get install build-essential     # Debian/Ubuntu
-```
-
-## Installazione
-
-### 1. Compilare il server Rust:
-```bash
-cargo build --bin server
-```
-
-### 2. Compilare il client Rust:
-```bash
-cd clientFS
-cargo build --release
-```
-
-## Utilizzo
-
-### 1. Avviare il server:
-```bash
-cargo run --bin server
-```
-
-Il server parte su `http://0.0.0.0:8080` e utilizza `/tmp/remote_fs_test` come storage locale (creato automaticamente).
-
-### 2. Creare un mount point e avviare il client:
-```bash
-# Creare la directory di mount
-mkdir -p /tmp/remotefs
-
-# Avviare il client (in un altro terminale)
-cd clientFS
-cargo run --release -- --server http://localhost:8080 --mountpoint /tmp/remotefs --verbose
-```
-
-### 2b. Avviare il client in modalità daemon (background):
-```bash
-cd clientFS
-cargo run --release -- --server http://localhost:8080 --mountpoint /tmp/remotefs --daemon
-
-# Per fermare il daemon:
-cargo run --release -- --mountpoint /tmp/remotefs --stop
-```
-
-### 3. Utilizzare il filesystem:
-```bash
-# Aprire un nuovo terminale e utilizzare il filesystem normalmente
-cd /tmp/remotefs
-ls -la
-cat test/hello.txt
-echo "Hello World" > newfile.txt
-mkdir newdir
-```
-
-### 4. Smontare il filesystem:
-Premere `Ctrl+C` nel terminale dove è in esecuzione il client.
-
-## API del Server
-
-Il server espone le seguenti API RESTful:
-
-- `GET /list/<path>` – Lista il contenuto di una directory
-- `GET /files/<path>` – Legge il contenuto di un file
-- `PUT /files/<path>` – Scrive il contenuto di un file
-- `POST /mkdir/<path>` – Crea una directory
-- `DELETE /files/<path>` – Elimina un file o directory
-- `POST /rename` – Rinomina o sposta un file/directory
-- `GET /health` – Health check
-
-## Architettura
-
-```
-┌─────────────┐          ┌──────────────┐          ┌─────────────┐
-│   Sistema   │  FUSE    │ Client Rust  │   HTTP   │   Server    │
-│ Operativo   │ ◄──────► │   (FUSE)     │ ◄──────► │   Rust/Actix│
-│             │          │              │          │             │
-└─────────────┘          └──────────────┘          └─────────────┘
-                                                           │
-                                                           ▼
-                                                    ┌─────────────┐
-                                                    │   File      │
-                                                    │   Storage   │
-                                                    └─────────────┘
-```
-
-## Operazioni Supportate
-
-- ✅ Lettura file
-- ✅ Scrittura file
-- ✅ Creazione file
-- ✅ Eliminazione file
-- ✅ Creazione directory
-- ✅ Eliminazione directory
-- ✅ Rinomina/spostamento
-- ✅ Listing directory
-- ✅ Attributi file (dimensione, timestamp, permessi)
-
-## Gestione Errori HTTP → POSIX
-
-Il client implementa un mapping fine degli errori HTTP ai codici di errore POSIX per un comportamento più robusto e messaggi di errore chiari:
-
-| HTTP Status | Errno POSIX | Significato |
-|-------------|-------------|-------------|
-| 400 | `EINVAL` | Parametri non validi |
-| 401, 403 | `EACCES` | Permesso negato |
-| **404** | **`ENOENT`** | **File o directory non trovata** |
-| 405 | `ENOSYS` | Operazione non supportata |
-| 409 | `EEXIST` | Risorsa già esistente |
-| 413 | `EFBIG` | File troppo grande |
-| **500** | **`EIO`** | **Errore I/O del server** |
-| 503 | `EAGAIN` | Servizio non disponibile |
-| 507 | `ENOSPC` | Spazio insufficiente |
-| Timeout | `ETIMEDOUT` | Timeout connessione |
-| Network | `EHOSTUNREACH` | Server non raggiungibile |
-
-### Esempi:
-```bash
-# File non trovato → ENOENT
-$ cat /tmp/remotefs/nonexistent.txt
-cat: nonexistent.txt: File o directory non esistente
-
-# Directory già esistente → EEXIST
-$ mkdir /tmp/remotefs/existing
-$ mkdir /tmp/remotefs/existing
-mkdir: existing: File già esistente
-```
-
-Per maggiori dettagli, vedere: [ERROR_MAPPING_IMPLEMENTATION.md](ERROR_MAPPING_IMPLEMENTATION.md)
-
-## Cache Locale con TTL
-
-Il client implementa una cache intelligente con scadenza (TTL) per ottimizzare le prestazioni e ridurre le richieste al server:
-
-### Livelli di Cache
-
-| Tipo Cache | TTL | Descrizione |
-|------------|-----|-------------|
-| **Metadati** | 5 secondi | Attributi file (dimensione, timestamp, permessi) |
-| **Directory** | 3 secondi | Listing delle directory |
-| **Dati File** | 30 secondi | Chunk di dati dei file (128KB per chunk) |
-
-### Politiche di Cache
-
-- **Write-through**: Le operazioni di scrittura scrivono direttamente sul server e invalidano la cache locale
-- **Invalidazione automatica**: Modifiche a file/directory invalidano le cache correlate (file, parent directory, metadati)
-- **Eviction LRU**: Quando la cache raggiunge 10MB, i chunk meno recentemente usati vengono rimossi
-- **Pulizia periodica**: Entry scadute vengono automaticamente rimosse
-
-### Esempi di comportamento:
-```bash
-# Prima lettura - cache miss, fetch dal server
-$ cat /tmp/remotefs/file.txt
-
-# Seconda lettura entro 30 secondi - cache hit
-$ cat /tmp/remotefs/file.txt   # Nessuna richiesta al server
-
-# Dopo modifica - cache invalidata
-$ echo "new content" > /tmp/remotefs/file.txt
-$ cat /tmp/remotefs/file.txt   # Nuovo fetch dal server
-```
-
-## Modalità Daemon
-
-Il client può essere eseguito in background come daemon:
+Installare FUSE3 e tool di build:
 
 ```bash
-# Avviare in background
-cd clientFS
-cargo run --release -- --server http://localhost:8080 \
-    --mountpoint /tmp/remotefs \
-    --daemon \
-    --pidfile /tmp/clientfs.pid \
-    --logfile /tmp/clientfs.log
+# Debian / Ubuntu
+sudo apt-get install fuse3 libfuse3-dev build-essential
 
-# Verificare che sia in esecuzione
-cat /tmp/clientfs.pid
+# Fedora
+sudo dnf install fuse3 fuse3-devel
 
-# Vedere i log
-tail -f /tmp/clientfs.log
-
-# Fermare il daemon
-cargo run --release -- --mountpoint /tmp/remotefs --stop
+# Arch
+sudo pacman -S fuse3
 ```
 
-## Recovery Automatico Mount Point
+---
 
-Il client gestisce automaticamente stati zombie del mount point:
+## 3. Struttura del progetto
 
-- **ENOTCONN (Transport endpoint not connected)**: Smontaggio forzato e riutilizzo
-- **Cleanup automatico**: Tentativi con `fusermount -u`, `fusermount -uz`, e `umount -l`
-- **Creazione automatica**: Se il mount point non esiste, viene creato automaticamente
-
-## Sviluppo
-
-### Struttura del progetto:
-```
+```text
 .
 ├── README.md
 ├── specifiche.md
 ├── requirements.txt
-├── src/server/             # Server Rust (Actix)
-│   ├── main.rs
-│   └── handlers.rs
-└── clientFS/               # Client FUSE Rust
+├── start_server.sh         # Script per avviare il server
+├── start_client.sh         # Script per avviare il client
+├── src/
+│   └── server/
+│       ├── main.rs         # Entry point server (Actix)
+│       └── handlers.rs     # Handler REST
+└── clientFS/
     ├── Cargo.toml
     └── src/
-        ├── main.rs         # Entry point del client
-        ├── api_client.rs   # Client HTTP per le API
-        └── filesystem.rs   # Implementazione FUSE + Cache
+        ├── main.rs         # Entry point client
+        ├── api_client.rs   # Client HTTP (REST + JWT + mapping errori)
+        ├── filesystem.rs   # Implementazione FUSE + write-through
+        └── cache.rs        # Gestione cache (TTL + LRU)
 ```
 
-### Test:
+Il server usa la directory `server_storage` (creata automaticamente nella root del progetto) come **storage locale**.
+
+### 3.1 Architettura
+
+  ┌─────────────┐          ┌──────────────┐          ┌─────────────┐
+  │   Sistema   │  FUSE    │ Client Rust  │   HTTP   │   Server    │
+  │ Operativo   │ ◄──────► │   (FUSE)     │ ◄──────► │   Rust/Actix│
+  │             │          │              │          │             │
+  └─────────────┘          └──────────────┘          └─────────────┘
+                                                            │
+                                                            ▼
+                                                      ┌─────────────┐
+                                                      │   File      │
+                                                      │   Storage   │
+                                                      └─────────────┘
+
+--- 
+
+## 4. Guida rapida: step da seguire per utilizzo
+
+### 4.1. Clonare la repository
+
 ```bash
-# Avviare il server in un terminale
-cargo run --bin server
-
-# Avviare il client in un altro terminale
-cd clientFS
-cargo run -- --server http://localhost:8080 --mountpoint /tmp/remotefs --verbose
-
-# Testare in un terzo terminale
-cd /tmp/remotefs
-ls -la
-echo "test" > file.txt
-cat file.txt
+git clone < URL_DELLA_REPO >
+cd Progetto_Malnati_FileSystem
 ```
 
-## Troubleshooting
+### 4.2. Compilare server e client (opzionale, gli script lo fanno comunque)
 
-### Il client non si compila:
-- Assicurarsi di avere installato `libfuse3-dev` e `build-essential`
-- Verificare che Rust sia aggiornato: `rustup update`
+- **Server**:
 
-### Il client non si monta:
-- Verificare che il server sia in esecuzione: `curl http://localhost:8080/health`
-- Verificare che FUSE sia disponibile: `fusermount3 --version`
-- Verificare i permessi sulla directory di mount
-- Provare con `sudo` se necessario
+```bash
+cargo build --bin server
+```
 
-### Errori di permessi:
-- Il client può richiedere l'opzione `allow_other` in `/etc/fuse.conf`
-- Alcuni sistemi richiedono di essere nel gruppo `fuse`: `sudo usermod -a -G fuse $USER`
+- **Client**:
 
-## Licenza
+```bash
+cd clientFS
+cargo build --release
+cd ..
+```
 
-Progetto didattico per il corso di Programmazione di Sistema.
+---
 
+### 4.3. Avviare il server
+
+Metodo consigliato (script):
+
+```bash
+./start_server.sh
+```
+
+Equivalente manuale:
+
+```bash
+cd /percorso/della/repo
+cargo run --bin server
+# Server in ascolto su http://0.0.0.0:8080
+# Storage in ./server_storage
+```
+
+Puoi verificare che sia attivo:
+
+```bash
+curl -i http://localhost:8080/health
+```
+
+---
+
+### 4.4. Avviare il client FUSE 
+
+### 4.4.1 Modalità foreground
+
+  In un **nuovo terminale**:
+
+  ```bash
+  # Crea la directory di mount (se non esiste)
+  mkdir -p /tmp/remotefs
+
+  # Avvia il client
+  ./start_client.sh /tmp/remotefs http://localhost:8080 foreground
+  ```
+
+  Cosa succede:
+
+  - Il client ti chiede la **password**.
+  - Chiama `POST /auth` sul server, riceve un token JWT.
+  - Monta `/tmp/remotefs` come filesystem FUSE.
+
+  > Per smontare in questa modalità: premi **Ctrl+C** nel terminale del client.
+
+### 4.4.2 Avviare il client in modalità daemon (background) 
+
+  ```bash
+  # Avvia in background
+  ./start_client.sh /tmp/remotefs http://localhost:8080 daemon
+
+  # Per fermare il daemon
+  ./start_client.sh /tmp/remotefs http://localhost:8080 stop
+  ```
+
+  In modalità daemon:
+
+  - Il client scrive i log (ad es. in `/tmp/clientfs.log`, a seconda della configurazione nel codice).
+  - Fa graceful shutdown su SIGINT/SIGTERM (unmount, svuota cache, chiude handle, rimuove pidfile).
+
+---
+
+### 4.6. Usare il filesystem remoto
+
+In un **terzo terminale**:
+
+```bash
+cd /tmp/remotefs
+
+# Esplorare
+ls -la
+
+# Creare e leggere file
+echo "Hello World" > hello.txt
+cat hello.txt
+
+# Creazione Directory
+mkdir testdir
+mv hello.txt testdir/
+ls -la testdir
+
+# Cancellare
+rm testdir/hello.txt
+rmdir testdir
+```
+
+## 5. API del server 
+
+Il server espone le seguenti API RESTful (autenticate con JWT):
+
+- **Autenticazione**
+  - `POST /auth` – autentica il client, restituisce un token JWT.
+
+- **Directory & file**
+  - `GET /list/<path>` – lista il contenuto di una directory (nome, tipo, size, mtime, ctime, permessi).
+  - `GET /files/<path>` – legge il contenuto di un file.
+    - Supporta header `Range: bytes=start-end` per letture parziali.
+  - `PUT /files/<path>` – scrive (o sovrascrive) l’intero contenuto di un file.
+  - `PATCH /files/<path>` – scrittura parziale con header `Content-Range: bytes start-end/*`.
+  - `HEAD /files/<path>` – restituisce solo metadati (Content-Length, Last-Modified).
+
+- **Gestione albero file**
+  - `POST /mkdir/<path>` – crea una directory (ricorsivamente).
+  - `DELETE /files/<path>` – elimina un file o directory.
+  - `POST /rename` – rinomina o sposta file/directory.
+
+- **Attributi**
+  - `PATCH /attrs/<path>` – aggiorna i permessi (`mode`).
+
+- **Healthcheck**
+  - `GET /health` – verifica che il server sia in esecuzione.
+
+---
+
+## 6. Cache locale con TTL (client)
+
+Il client implementa una cache multilivello per ridurre le richieste al server:
+
+- **Metadati (inode)**:
+  - TTL: **5 secondi**.
+- **Directory listing**:
+  - TTL: **3 secondi**.
+- **Dati file (chunk)**:
+  - TTL: **10 secondi**.
+  - Chunk da **128KB**, limite globale **10MB** con eviction **LRU**.
+
+Politiche:
+
+- **Write-through**: ogni operazione di scrittura/rename/chmod scrive subito sul server.
+- **Invalidazione automatica**:
+  - Dopo una modifica, vengono invalidate:
+    - cache del file,
+    - cache della directory interessata,
+    - metadati associati (inode).
+- **Pulizia periodica**:
+  - Entry scadute vengono rimosse automaticamente durante le operazioni (es. `getattr` sulla root).
+
+---
+
+## 7. Gestione errori HTTP → POSIX
+
+Il client mappa gli errori HTTP in errno POSIX, così i programmi vedono errori “normali”:
+
+| HTTP    | Errno POSIX     | Significato                       |
+|---------|-----------------|-----------------------------------|
+| 400     | `EINVAL`        | Parametri non validi              |
+| 401/403 | `EACCES`        | Permesso negato                   |
+| 404     | `ENOENT`        | File o directory non trovata      |
+| 405     | `ENOSYS`        | Operazione non supportata         |
+| 409     | `EEXIST`        | Risorsa già esistente             |
+| 413     | `EFBIG`         | File troppo grande                |
+| 500     | `EIO`           | Errore I/O del server             |
+| 503     | `EAGAIN`        | Servizio non disponibile          |
+| 507     | `ENOSPC`        | Spazio insufficiente              |
+| Timeout | `ETIMEDOUT`     | Timeout connessione               |
+| Network | `EHOSTUNREACH`  | Server non raggiungibile          |
+
+---
+
+## 8. Troubleshooting (problemi comuni)
+
+- **Il client non si compila**
+  - Verifica di aver installato `libfuse3-dev` e `build-essential`.
+  - Aggiorna Rust: `rustup update`.
+
+- **Il client non monta**
+  - Controlla che il server sia in esecuzione: `curl http://localhost:8080/health`.
+  - Verifica che FUSE3 sia disponibile: `fusermount3 --version`.
+  - Verifica i permessi sulla directory di mount.
+  - Prova con `sudo` se necessario.
+
+- **Errori di permessi (401/403)**
+  - Password errata all’avvio del client.
+  - `JWT_SECRET` lato server cambiato senza riavviare i client.
+
+- **Mountpoint “zombie” (ENOTCONN)**
+  - Il client cerca di gestire automaticamente questi casi.
+  - In caso di problemi, prova:
+    - `fusermount3 -u /tmp/remotefs`  
+    - oppure `sudo umount -l /tmp/remotefs` e riavvia il client.
+
+---
+
+## 9. Licenza / contesto
+
+Progetto didattico per il corso di **Programmazione di Sistema**, non destinato alla produzione.
