@@ -14,9 +14,7 @@ use api_client::ApiClient;
 use cli::Args;
 use filesystem::RemoteFS;
 
-/// Entry point: we do NOT use #[tokio::main] because daemonize (fork)
-/// must happen BEFORE any Tokio runtime is created. A forked multi-thread
-/// runtime is corrupted and network I/O silently fails.
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -25,17 +23,15 @@ fn main() -> Result<()> {
         return daemon::stop_daemon(&args.pidfile, &args.mountpoint);
     }
 
-    // Authentication: we need a temporary runtime just for the login request.
-    // This runtime is dropped before fork() so the daemon child starts clean.
+    // Authentication
     let password = auth::ask_password();
     let token = {
         let tmp_rt = tokio::runtime::Runtime::new()
             .context("Failed to create temporary runtime for authentication")?;
         tmp_rt.block_on(auth::authenticate(&args.server, &password))?
     };
-    // tmp_rt is dropped here — safe to fork
 
-    // If daemon mode, fork BEFORE creating the real Tokio runtime
+    // If daemon mode
     if args.daemon {
         daemon::daemonize(&args.pidfile, &args.logfile, &args.mountpoint)?;
     }
@@ -47,7 +43,6 @@ fn main() -> Result<()> {
     runtime.block_on(async_main(args, token))
 }
 
-/// Actual async logic, executed inside a fresh Tokio runtime.
 async fn async_main(args: Args, token: String) -> Result<()> {
     // Initialize logging (after daemonize, so output goes to logfile)
     cli::init_logging(args.verbose);
