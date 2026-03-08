@@ -41,9 +41,9 @@ struct InodeTable {
     inodes: HashMap<u64, INode>,
     path_to_ino: HashMap<String, u64>,
     next_ino: u64,
-    /// UID dell'utente che ha montato il filesystem
+    /// UID dell'utente che ha montato il filesystem (per compatibilità con mac)
     uid: u32,
-    /// GID dell'utente che ha montato il filesystem
+    /// GID dell'utente che ha montato il filesystem (per compatibilità con mac)
     gid: u32,
 }
 

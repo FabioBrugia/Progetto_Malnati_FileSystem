@@ -9,7 +9,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-/// Controlla se un path è attualmente un mountpoint FUSE attivo.
+/// Checks if a path is currently an active FUSE mountpoint.
 pub fn is_fuse_mounted(mountpoint: &Path) -> bool {
     let canonical = match fs::canonicalize(mountpoint) {
         Ok(p) => p,
@@ -24,7 +24,7 @@ pub fn is_fuse_mounted(mountpoint: &Path) -> bool {
             for line in reader.lines().flatten() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 3 && parts[1] == mount_str {
-                    // Verifica che sia un mount FUSE
+                    // Verify it's a FUSE mount
                     if parts[2].starts_with("fuse") || parts[0].contains("fuse") {
                         return true;
                     }
@@ -54,9 +54,9 @@ pub fn is_fuse_mounted(mountpoint: &Path) -> bool {
     }
 }
 
-/// Smonta un mountpoint FUSE, con retry e fallback lazy-unmount.
+/// Unmounts a FUSE mountpoint, with retry and lazy-unmount fallback.
 ///
-/// Restituisce Ok(true) se lo smontaggio è riuscito, Ok(false) se non era montato.
+/// Returns Ok(true) if unmount succeeded, Ok(false) if it was not mounted.
 pub fn unmount_fuse(mountpoint: &Path) -> Result<bool> {
     if !is_fuse_mounted(mountpoint) {
         return Ok(false);
@@ -64,7 +64,7 @@ pub fn unmount_fuse(mountpoint: &Path) -> Result<bool> {
 
     #[cfg(target_os = "linux")]
     {
-        // Primo tentativo: fusermount -u
+        // First attempt: fusermount -u
         let output = Command::new("fusermount")
             .arg("-u")
             .arg(mountpoint)
@@ -72,7 +72,7 @@ pub fn unmount_fuse(mountpoint: &Path) -> Result<bool> {
 
         if let Ok(out) = &output {
             if out.status.success() {
-                // Attendi un attimo e verifica
+                // Wait briefly and verify
                 thread::sleep(Duration::from_millis(200));
                 if !is_fuse_mounted(mountpoint) {
                     return Ok(true);
@@ -80,7 +80,7 @@ pub fn unmount_fuse(mountpoint: &Path) -> Result<bool> {
             }
         }
 
-        // Secondo tentativo: lazy unmount
+        // Second attempt: lazy unmount
         let _ = Command::new("fusermount")
             .arg("-uz")
             .arg(mountpoint)
@@ -92,7 +92,7 @@ pub fn unmount_fuse(mountpoint: &Path) -> Result<bool> {
             return Ok(true);
         }
 
-        // Terzo tentativo: sudo umount -l
+        // Third attempt: sudo umount -l
         let _ = Command::new("sudo")
             .arg("umount")
             .arg("-l")
@@ -105,7 +105,7 @@ pub fn unmount_fuse(mountpoint: &Path) -> Result<bool> {
 
     #[cfg(target_os = "macos")]
     {
-        // Primo tentativo: umount
+        // First attempt: umount
         let output = Command::new("umount").arg(mountpoint).output();
 
         if let Ok(out) = &output {
@@ -117,7 +117,7 @@ pub fn unmount_fuse(mountpoint: &Path) -> Result<bool> {
             }
         }
 
-        // Secondo tentativo: force unmount
+        // Second attempt: force unmount
         let _ = Command::new("umount").arg("-f").arg(mountpoint).output();
 
         thread::sleep(Duration::from_millis(500));
@@ -126,7 +126,7 @@ pub fn unmount_fuse(mountpoint: &Path) -> Result<bool> {
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        // Fallback: tenta umount standard
+        // Fallback: try standard umount
         let output = Command::new("umount").arg(mountpoint).output();
         if let Ok(out) = &output {
             if out.status.success() {
@@ -138,38 +138,38 @@ pub fn unmount_fuse(mountpoint: &Path) -> Result<bool> {
     }
 }
 
-/// Ferma il daemon in esecuzione.
+/// Stops the running daemon.
 ///
-/// Smonta il filesystem FUSE e termina il processo daemon.
+/// Unmounts the FUSE filesystem and terminates the daemon process.
 pub fn stop_daemon(pidfile: &Path, mountpoint: &Path) -> Result<()> {
-    // Prima smonta il filesystem
-    println!("Smontaggio filesystem da {}...", mountpoint.display());
+    // First unmount the filesystem
+    println!("Unmounting filesystem from {}...", mountpoint.display());
 
     match unmount_fuse(mountpoint) {
-        Ok(true) => println!("Filesystem smontato correttamente."),
-        Ok(false) => println!("Il filesystem non era montato."),
-        Err(e) => println!("Avviso durante lo smontaggio: {}", e),
+        Ok(true) => println!("Filesystem unmounted successfully."),
+        Ok(false) => println!("Filesystem was not mounted."),
+        Err(e) => println!("Warning during unmount: {}", e),
     }
 
-    // Leggi il PID e termina il processo
+    // Read the PID and terminate the process
     if pidfile.exists() {
         let pid_str = fs::read_to_string(pidfile)
-            .context("Impossibile leggere il PID file")?;
+            .context("Unable to read PID file")?;
         let pid: i32 = pid_str.trim().parse()
-            .context("PID non valido")?;
+            .context("Invalid PID")?;
 
-        // Controlla se il processo è ancora in esecuzione
+        // Check if the process is still running
         let process_alive = unsafe { libc::kill(pid, 0) } == 0;
 
         if process_alive {
-            println!("Terminazione processo daemon (PID: {})...", pid);
+            println!("Terminating daemon process (PID: {})...", pid);
 
-            // Invia SIGTERM
+            // Send SIGTERM
             unsafe {
                 libc::kill(pid, libc::SIGTERM);
             }
 
-            // Attendi fino a 5 secondi che il processo termini
+            // Wait up to 5 seconds for the process to terminate
             for _ in 0..50 {
                 thread::sleep(Duration::from_millis(100));
                 let still_alive = unsafe { libc::kill(pid, 0) } == 0;
@@ -178,26 +178,26 @@ pub fn stop_daemon(pidfile: &Path, mountpoint: &Path) -> Result<()> {
                 }
             }
 
-            // Se ancora vivo, invia SIGKILL
+            // If still alive, send SIGKILL
             let still_alive = unsafe { libc::kill(pid, 0) } == 0;
             if still_alive {
-                println!("Il processo non risponde, invio SIGKILL...");
+                println!("Process not responding, sending SIGKILL...");
                 unsafe {
                     libc::kill(pid, libc::SIGKILL);
                 }
             }
         } else {
-            println!("Il processo daemon (PID: {}) non è più in esecuzione.", pid);
+            println!("Daemon process (PID: {}) is no longer running.", pid);
         }
 
-        // Rimuovi il PID file
+        // Remove the PID file
         let _ = fs::remove_file(pidfile);
-        println!("Daemon fermato.");
+        println!("Daemon stopped.");
     } else {
-        println!("Nessun daemon in esecuzione (PID file non trovato).");
-        // Prova comunque a smontare nel caso il pidfile sia stato perso
+        println!("No daemon running (PID file not found).");
+        // Try to unmount anyway in case the pidfile was lost
         if is_fuse_mounted(mountpoint) {
-            println!("Tuttavia il mountpoint risulta ancora montato. Smontaggio forzato...");
+            println!("However the mountpoint is still mounted. Forcing unmount...");
             let _ = unmount_fuse(mountpoint);
         }
     }
@@ -205,20 +205,20 @@ pub fn stop_daemon(pidfile: &Path, mountpoint: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Avvia il processo in modalità daemon (background).
+/// Starts the process in daemon (background) mode.
 ///
-/// Dopo questa chiamata, il processo è stato forkato e il padre è terminato.
-/// Il codice che segue viene eseguito nel processo figlio (daemon).
+/// After this call, the process has been forked and the parent has exited.
+/// The code that follows runs in the child process (daemon).
 pub fn daemonize(pidfile: &Path, logfile: &Path, mountpoint: &Path) -> Result<()> {
-    println!("Avvio in modalità daemon...");
+    println!("Starting in daemon mode...");
     println!("PID file: {}", pidfile.display());
     println!("Log file: {}", logfile.display());
     println!("Mount point: {}", mountpoint.display());
 
     let stdout = File::create(logfile)
-        .context("Impossibile creare il file di log")?;
+        .context("Unable to create log file")?;
     let stderr = stdout.try_clone()
-        .context("Impossibile duplicare il file di log")?;
+        .context("Unable to duplicate log file")?;
 
     let daemonize = Daemonize::new()
         .pid_file(pidfile)
@@ -228,48 +228,48 @@ pub fn daemonize(pidfile: &Path, logfile: &Path, mountpoint: &Path) -> Result<()
         .stderr(stderr);
 
     daemonize.start()
-        .map_err(|e| anyhow::anyhow!("Impossibile avviare il daemon: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Unable to start daemon: {}", e))?;
 
     Ok(())
 }
 
-/// Verifica e prepara il mount point.
+/// Verifies and prepares the mount point.
 ///
-/// Se il mount point è già montato con FUSE, lo smonta prima.
-/// Se è in stato ENOTCONN (FUSE zombie), tenta lo smontaggio forzato.
-/// Crea la directory se non esiste.
+/// If the mount point is already mounted with FUSE, it unmounts it first.
+/// If it is in ENOTCONN state (FUSE zombie), it attempts a forced unmount.
+/// Creates the directory if it does not exist.
 pub fn ensure_mountpoint(dir: &PathBuf) -> Result<()> {
-    log::debug!("Verifica mountpoint: {}", dir.display());
+    log::debug!("Checking mountpoint: {}", dir.display());
 
-    // Controlla se è già montato con FUSE → smonta e ricollega
+    // Check if already mounted with FUSE → unmount and reconnect
     if is_fuse_mounted(dir) {
         log::warn!(
-            "Il mountpoint {} è già montato con FUSE. Smontaggio per ricollegamento...",
+            "Mountpoint {} is already mounted. Unmounting...",
             dir.display()
         );
         match unmount_fuse(dir) {
-            Ok(true) => log::info!("Vecchio mount FUSE smontato con successo."),
-            Ok(false) => log::warn!("Non è stato possibile smontare il vecchio mount."),
-            Err(e) => log::warn!("Errore durante lo smontaggio del vecchio mount: {}", e),
+            Ok(true) => log::info!("Old mountpoint unmounted correctly."),
+            Ok(false) => log::warn!("Mountpoint was not mounted, but is_fuse_mounted returned true. Check manually: {}", dir.display()),
+            Err(e) => log::warn!("Error during unmount operation: {}", e),
         }
-        // Attendi un attimo per assicurarsi che il kernel rilasci la risorsa
+        // Wait briefly to ensure the kernel releases the resource
         thread::sleep(Duration::from_millis(300));
     }
 
     if dir.exists() {
-        // Check se il path è in stato ENOTCONN (endpoint FUSE zombie)
+        // Check if the path is in ENOTCONN state (FUSE zombie endpoint)
         match fs::metadata(dir) {
             Ok(meta) => {
                 if !meta.is_dir() {
-                    anyhow::bail!("Mount point esiste ma non è una directory");
+                    anyhow::bail!("Mount point exist but is not a directory: {}", dir.display());
                 }
             }
             Err(e) => {
                 if let Some(code) = e.raw_os_error() {
                     if code == libc::ENOTCONN {
                         log::warn!(
-                            "Mountpoint in stato 'Transport endpoint not connected' (ENOTCONN). \
-                             Provo smontaggio forzato..."
+                            "Mountpoint state: 'Transport endpoint not connected' (ENOTCONN). \
+                             Attempting forced unmount..."
                         );
 
                         #[cfg(target_os = "linux")]
@@ -285,9 +285,9 @@ pub fn ensure_mountpoint(dir: &PathBuf) -> Result<()> {
                             let _ = Command::new("umount").arg("-f").arg(dir).output();
                         }
 
-                        // Attendi e riprova
+                        // Wait and retry
                         thread::sleep(Duration::from_millis(500));
-                        // Se ancora in stato zombie, prova a rimuovere
+                        // If still in zombie state, try to remove
                         match fs::metadata(dir) {
                             Ok(_) => {}
                             Err(_) => {
@@ -296,7 +296,7 @@ pub fn ensure_mountpoint(dir: &PathBuf) -> Result<()> {
                         }
                     } else {
                         log::warn!(
-                            "Errore nel metadata del mountpoint (code={}): {}",
+                            "Error metadata of mountpoint (code={}): {}",
                             code, e
                         );
                     }
@@ -305,22 +305,22 @@ pub fn ensure_mountpoint(dir: &PathBuf) -> Result<()> {
         }
     }
 
-    // Crea se non esiste o dopo pulizia
+    // Create if it doesn't exist or after cleanup
     match fs::create_dir_all(dir) {
         Ok(_) => {
-            log::debug!("Mountpoint pronto: {}", dir.display());
+            log::debug!("Mountpoint ready: {}", dir.display());
             Ok(())
         }
         Err(e) => {
             if let Some(code) = e.raw_os_error() {
                 if code == libc::EEXIST {
-                    log::debug!("Directory già esistente: {}", dir.display());
+                    log::debug!("Directory already exists: {}", dir.display());
                     return Ok(());
                 } else if code == libc::ENOTCONN {
                     anyhow::bail!(
-                        "Mountpoint ancora in stato ENOTCONN. Chiudi ogni shell o processo \
-                         che usa {} e riprova oppure usa un mount point diverso \
-                         (es. /tmp/remotefs2)",
+                        "Mountpoint still in ENOTCONN state. Close all shells or processes \
+                         using {} and retry, or use another mount point \
+                         (e.g. /tmp/remotefs2)",
                         dir.display()
                     );
                 }
