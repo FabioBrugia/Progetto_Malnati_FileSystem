@@ -6,6 +6,8 @@ use std::fs;
 mod handlers;
 mod auth;
 mod auth_middleware;
+#[cfg(test)]
+mod tests;
 
 use auth_middleware::AuthMiddleware;
 const STORED_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$I1XtoiH6Ni2CbrR3GWRlXA$KK/6iTuzFPa8PdFd7CFtkRKEH/0ZpNV0hPTZeiKH3BQ";
@@ -43,10 +45,14 @@ async fn main() -> std::io::Result<()> {
     }
     env_logger::init();
 
-    // Base dir fissa; host/port fissi
-    let base_dir = "server_storage".to_string();
+    // Consente override via env per test/integrazione.
+    let base_dir = std::env::var("SERVER_BASE_DIR").unwrap_or_else(|_| "server_storage".to_string());
+    let bind_addr = std::env::var("SERVER_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
 
-    println!("Avvio server Remote File System su http://0.0.0.0:8080 (base_dir: {})", base_dir);
+    println!(
+        "Avvio server Remote File System su http://{} (base_dir: {})",
+        bind_addr, base_dir
+    );
 
     // Crea la directory base se non esiste
     fs::create_dir_all(&base_dir).unwrap();
@@ -89,7 +95,7 @@ async fn main() -> std::io::Result<()> {
             .route("/attrs/{path:.*}", web::patch().to(handlers::set_attrs))
             .route("/health", web::get().to(handlers::health))
     })
-    .bind("0.0.0.0:8080")?
+    .bind(&bind_addr)?
     .run()
     .await
 }

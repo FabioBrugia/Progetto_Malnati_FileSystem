@@ -37,3 +37,15 @@ reqwest = { version = "0.11", features = ["blocking", "json"] }
 tempfile = "3"
 ctor = "0.2"
 serde_json = "1.0"
+
+[[test]]
+name = "client_server_basic"
+path = "integration_tests/client_server_basic.rs"
+
+[[test]]
+name = "filesystem_operations"
+path = "integration_tests/filesystem_operations.rs"
+
+[[test]]
+name = "error_scenarios"
+path = "integration_tests/error_scenarios.rs"
