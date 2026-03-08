@@ -38,6 +38,20 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
+    fn validate_path(path: &str, operation: &str) -> Result<(), ApiError> {
+        if path
+            .split('/')
+            .any(|segment| segment == "..")
+        {
+            return Err(ApiError {
+                errno: libc::EINVAL,
+                message: format!("{}: Invalid path traversal attempt", operation),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Crea un nuovo client API.
     ///
     /// # Argomenti
@@ -72,6 +86,7 @@ impl ApiClient {
 
     /// Elenca il contenuto di una directory.
     pub fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, ApiError> {
+        Self::validate_path(path, "list_directory")?;
         let url = format!("{}/list/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Listing directory: {}", url);
 
@@ -93,6 +108,7 @@ impl ApiClient {
 
     /// Legge l'intero contenuto di un file.
     pub fn read_file(&self, path: &str) -> Result<Vec<u8>, ApiError> {
+        Self::validate_path(path, "read_file")?;
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Reading file: {}", url);
 
@@ -114,6 +130,7 @@ impl ApiClient {
 
     /// Legge un chunk di un file usando HTTP Range requests.
     pub fn read_file_chunk(&self, path: &str, offset: u64, size: u32) -> Result<Vec<u8>, ApiError> {
+        Self::validate_path(path, "read_file_chunk")?;
         if size == 0 {
             log::debug!("read_file_chunk called with size=0 for {}, returning empty", path);
             return Ok(Vec::new());
@@ -154,6 +171,7 @@ impl ApiClient {
 
     /// Scrive (o sovrascrive) l'intero contenuto di un file.
     pub fn write_file(&self, path: &str, data: &[u8]) -> Result<(), ApiError> {
+        Self::validate_path(path, "write_file")?;
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Writing file: {} ({} bytes)", url, data.len());
 
@@ -174,6 +192,7 @@ impl ApiClient {
     ///
     /// Se il server non supporta PATCH (405), fallback a read-modify-write.
     pub fn write_file_chunk(&self, path: &str, offset: u64, data: &[u8]) -> Result<(), ApiError> {
+        Self::validate_path(path, "write_file_chunk")?;
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Writing file chunk: {} (offset={}, size={})", url, offset, data.len());
 
@@ -232,6 +251,7 @@ impl ApiClient {
 
     /// Crea una nuova directory sul server.
     pub fn create_directory(&self, path: &str) -> Result<(), ApiError> {
+        Self::validate_path(path, "create_directory")?;
         let url = format!("{}/mkdir/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Creating directory: {}", url);
 
@@ -250,6 +270,7 @@ impl ApiClient {
 
     /// Elimina un file o una directory sul server.
     pub fn delete(&self, path: &str) -> Result<(), ApiError> {
+        Self::validate_path(path, "delete")?;
         let url = format!("{}/files/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Deleting: {}", url);
 
@@ -268,6 +289,8 @@ impl ApiClient {
 
     /// Rinomina un file o directory sul server.
     pub fn rename(&self, from: &str, to: &str) -> Result<(), ApiError> {
+        Self::validate_path(from, "rename")?;
+        Self::validate_path(to, "rename")?;
         let url = format!("{}/rename", self.base_url);
         log::debug!("Renaming: {} -> {}", from, to);
 
@@ -297,6 +320,7 @@ impl ApiClient {
 
     /// Imposta gli attributi (attualmente solo i permessi) di un file sul server.
     pub fn set_attrs(&self, path: &str, mode: Option<u32>) -> Result<(), ApiError> {
+        Self::validate_path(path, "set_attrs")?;
         let url = format!("{}/attrs/{}", self.base_url, path.trim_start_matches('/'));
         log::debug!("Setting attrs for {}: mode={:?}", url, mode);
 

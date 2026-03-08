@@ -36,7 +36,7 @@ impl INode {
 
 // ─── Inode Table ─────────────────────────────────────────────────────
 
-/// Tabella degli inode: gestisce il mapping path ↔ inode number livello di cash.
+/// Tabella degli inode: gestisce il mapping path - inode number livello di cash.
 struct InodeTable {
     inodes: HashMap<u64, INode>,
     path_to_ino: HashMap<String, u64>,

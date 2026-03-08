@@ -17,3 +17,6 @@ ctrlc = "3.4"
 daemonize = "0.5"
 rpassword = "7.4.0"
 tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+mockito = "1.6"
