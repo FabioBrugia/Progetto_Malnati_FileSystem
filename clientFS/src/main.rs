@@ -14,40 +14,57 @@ use api_client::ApiClient;
 use cli::Args;
 use filesystem::RemoteFS;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Entry point: we do NOT use #[tokio::main] because daemonize (fork)
+/// must happen BEFORE any Tokio runtime is created. A forked multi-thread
+/// runtime is corrupted and network I/O silently fails.
+fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Se richiesto --stop, ferma il daemon
+    // If --stop was requested, stop the daemon (no runtime needed)
     if args.stop {
         return daemon::stop_daemon(&args.pidfile, &args.mountpoint);
     }
 
-    // Autenticazione
+    // Authentication: we need a temporary runtime just for the login request.
+    // This runtime is dropped before fork() so the daemon child starts clean.
     let password = auth::ask_password();
-    let token = auth::authenticate(&args.server, &password).await?;
+    let token = {
+        let tmp_rt = tokio::runtime::Runtime::new()
+            .context("Failed to create temporary runtime for authentication")?;
+        tmp_rt.block_on(auth::authenticate(&args.server, &password))?
+    };
+    // tmp_rt is dropped here — safe to fork
 
-    // Se daemon mode, daemonizza prima di tutto
+    // If daemon mode, fork BEFORE creating the real Tokio runtime
     if args.daemon {
         daemon::daemonize(&args.pidfile, &args.logfile, &args.mountpoint)?;
     }
 
-    // Inizializza logging (dopo daemonize, per non perdere l'output)
+    // Now create the real Tokio runtime (in the daemon child if forked)
+    let runtime = tokio::runtime::Runtime::new()
+        .context("Failed to create Tokio runtime")?;
+
+    runtime.block_on(async_main(args, token))
+}
+
+/// Actual async logic, executed inside a fresh Tokio runtime.
+async fn async_main(args: Args, token: String) -> Result<()> {
+    // Initialize logging (after daemonize, so output goes to logfile)
     cli::init_logging(args.verbose);
 
     log::info!("Remote File System Client");
     log::info!("Server: {}", args.server);
     log::info!("Mount point: {}", args.mountpoint.display());
 
-    // Verifica e prepara il mount point
+    // Verify and prepare the mount point
     daemon::ensure_mountpoint(&args.mountpoint)?;
 
-    // Crea il client API con l'handle del runtime Tokio
+    // Create the API client with the current (fresh) runtime handle
     let runtime_handle = tokio::runtime::Handle::current();
     let api_client = ApiClient::new(args.server.clone(), token, runtime_handle)
         .context("Failed to create API client")?;
 
-    // Test connessione al server
+    // Test connection to server
     log::info!("Testing connection to server...");
     api_client
         .health_check()
@@ -55,7 +72,7 @@ async fn main() -> Result<()> {
         .context("Failed to connect to server. Is the server running?")?;
     log::info!("Successfully connected to server");
 
-    // Crea e monta il filesystem
+    // Create and mount the filesystem
     let fs = RemoteFS::new(api_client);
 
     #[cfg(target_os = "linux")]
@@ -68,11 +85,11 @@ async fn main() -> Result<()> {
     log::info!("Mounting filesystem...");
     log::info!("Use Ctrl+C or '{}' to unmount", unmount_hint);
 
-    // Condividiamo l'unmounter per il graceful shutdown
+    // Shared unmounter for graceful shutdown
     let unmounter: Arc<Mutex<Option<fuser::SessionUnmounter>>> = Arc::new(Mutex::new(None));
     let unmounter_for_signal = unmounter.clone();
 
-    // Registra il signal handler per SIGINT (Ctrl+C) e SIGTERM
+    // Register signal handler for SIGINT (Ctrl+C) and SIGTERM
     let mount_display = args.mountpoint.display().to_string();
     let mountpoint_for_signal = args.mountpoint.clone();
     let pidfile_for_signal = args.pidfile.clone();
@@ -87,10 +104,10 @@ async fn main() -> Result<()> {
 
             tokio::select! {
                 _ = ctrl_c => {
-                    log::info!("Ricevuto SIGINT (Ctrl+C). Smontaggio in corso...");
+                    log::info!("Received SIGINT (Ctrl+C). Unmounting...");
                 }
                 _ = sigterm.recv() => {
-                    log::info!("Ricevuto SIGTERM. Smontaggio in corso...");
+                    log::info!("Received SIGTERM. Unmounting...");
                 }
             }
         }
@@ -98,34 +115,34 @@ async fn main() -> Result<()> {
         #[cfg(not(unix))]
         {
             let _ = ctrl_c.await;
-            log::info!("Ricevuto segnale di terminazione (Ctrl+C). Smontaggio in corso...");
+            log::info!("Received termination signal (Ctrl+C). Unmounting...");
         }
 
-        // Esegui l'unmount
+        // Perform unmount
         if let Ok(mut guard) = unmounter_for_signal.lock() {
             if let Some(ref mut u) = *guard {
                 if daemon::is_fuse_mounted(&mountpoint_for_signal) {
-                    log::info!("Smontaggio filesystem da {}...", mount_display);
+                    log::info!("Unmounting filesystem from {}...", mount_display);
                     if let Err(e) = u.unmount() {
-                        log::error!("Errore durante lo smontaggio: {}", e);
+                        log::error!("Error during unmount: {}", e);
                     }
                 } else {
                     log::info!(
-                        "Mountpoint {} non risulta montato, salto lo smontaggio.",
+                        "Mountpoint {} is not mounted, skipping unmount.",
                         mount_display
                     );
                 }
             }
         }
 
-        // Rimuovi il PID file se in daemon mode
+        // Remove the PID file if in daemon mode
         if is_daemon {
             let _ = std::fs::remove_file(&pidfile_for_signal);
-            log::info!("PID file rimosso.");
+            log::info!("PID file removed.");
         }
     });
 
-    // fuser::Session::run() blocca il thread — lo eseguiamo in spawn_blocking
+    // fuser::Session::run() blocks the thread — run it in spawn_blocking
     let unmounter_for_mount = unmounter.clone();
     let mountpoint_for_mount = args.mountpoint.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -135,12 +152,12 @@ async fn main() -> Result<()> {
     .await
     .context("Mount task panicked")??;
 
-    log::info!("Filesystem smontato correttamente.");
+    log::info!("Filesystem unmounted successfully.");
 
-    // Pulizia PID file dopo lo smontaggio
+    // Cleanup PID file after unmount
     if args.daemon && args.pidfile.exists() {
         let _ = std::fs::remove_file(&args.pidfile);
-        log::info!("PID file rimosso.");
+        log::info!("PID file removed.");
     }
 
     Ok(())
