@@ -17,7 +17,7 @@ pub const DIRECTORY_CACHE_TTL: Duration = Duration::from_secs(3);
 /// TTL per i dati dei file (chunk)
 pub const DATA_CACHE_TTL: Duration = Duration::from_secs(10);
 
-// ─── Wrapper generico con TTL ────────────────────────────────────────
+//Wrapper  con TTL
 
 /// Entry di cache con scadenza temporale (TTL).
 #[derive(Debug, Clone)]
@@ -41,9 +41,9 @@ impl<T> CachedEntry<T> {
     }
 }
 
-// ─── Cache chunk dati file ───────────────────────────────────────────
+//Cache chunk dati file
 
-/// Chunk di dati di un file in cache, con LRU tracking.
+/// Chunk di dati di un file in cache, con LRU.
 #[derive(Debug, Clone)]
 struct CachedChunk {
     data: Vec<u8>,
@@ -66,7 +66,7 @@ struct FileCache {
     total_size: usize,
 }
 
-// ─── Cache listing directory ─────────────────────────────────────────
+// Cache listing directory
 
 /// Cache per il listing di una directory.
 #[derive(Debug, Clone)]
@@ -74,14 +74,13 @@ pub struct DirectoryCache {
     pub entries: CachedEntry<Vec<FileEntry>>,
 }
 
-// ─── Cache Manager ───────────────────────────────────────────────────
+// Cache Manager
 
-/// Gestore centralizzato di tutte le cache del filesystem.
+/// Gestore di tutte le cache del filesystem.
 ///
-/// Gestisce tre livelli di cache:
-/// - **Directory cache**: listing directory con TTL
-/// - **File data cache**: chunk di dati file con LRU + TTL
-/// - **Metadata invalidation**: coordinata con le altre cache
+/// Gestisce 2 livelli di cache:
+/// - Directory cache: listing directory con TTL
+/// - file data cache: chunk di dati file con LRU + TTL
 pub struct CacheManager {
     /// Cache dei dati file (chunk)
     file_cache: HashMap<String, FileCache>,
@@ -97,7 +96,7 @@ impl CacheManager {
         }
     }
 
-    // ── Directory cache ──────────────────────────────────────────────
+    // Directory cache
 
     /// Restituisce il listing directory solo se presente in cache e valido.
     ///
@@ -159,7 +158,7 @@ impl CacheManager {
         }
     }
 
-    // ── File data cache ──────────────────────────────────────────────
+    // File data cache
 
     /// Legge dati solo dalla cache locale (nessun I/O remoto).
     pub fn read_from_cache(&mut self, path: &str, offset: u64, size: u32) -> Option<Vec<u8>> {
@@ -283,18 +282,17 @@ impl CacheManager {
         }
     }
 
-    // ── Invalidazione globale ────────────────────────────────────────
+    // Invalidazione globale
 
-    /// Invalida tutte le cache associate a un path (write-through).
-    ///
-    /// Chiamato dopo operazioni di scrittura per garantire consistenza.
+
+    /// Write-through chiamato dopo operazioni di scrittura per garantire consistenza.
     pub fn invalidate_all_for_path(&mut self, path: &str) {
         self.invalidate_file_cache(path);
         self.invalidate_directory_cache(path);
         log::debug!("Invalidated all caches for {}", path);
     }
 
-    // ── Pulizia periodica ────────────────────────────────────────────
+    // Pulizia periodica
 
     /// Pulisce tutte le entry scadute dalle cache.
     ///

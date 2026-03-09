@@ -1,19 +1,15 @@
-/// Errore personalizzato che mappa gli errori HTTP ai codici POSIX (errno).
-///
-/// Utilizzato per tradurre le risposte HTTP del server in errori
-/// comprensibili dal layer FUSE.
+/// Errore  che mappa gli errori HTTP ai codici POSIX (errno).
+
 #[derive(Debug)]
 pub struct ApiError {
-    /// Codice errno POSIX (es. ENOENT, EIO, EACCES)
+    // Codice errno POSIX
     pub errno: i32,
-    /// Messaggio descrittivo dell'errore
+    //Messaggio
     pub message: String,
 }
 
 impl ApiError {
     /// Mappa un codice di stato HTTP al corrispondente errno POSIX.
-    ///
-    /// # Mappature principali
     /// - 400 → EINVAL (parametri non validi)
     /// - 401/403 → EACCES (permesso negato)
     /// - 404 → ENOENT (file non trovato)

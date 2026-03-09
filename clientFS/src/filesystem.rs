@@ -15,7 +15,7 @@ use crate::cache::{CacheManager, CHUNK_SIZE, METADATA_CACHE_TTL};
 /// TTL restituito al kernel FUSE per le entry.
 const FUSE_TTL: Duration = Duration::from_secs(1);
 
-// ─── INode ───────────────────────────────────────────────────────────
+// INode Struct
 
 /// Rappresenta un inode nel filesystem virtuale.
 #[derive(Debug, Clone)]
@@ -34,7 +34,7 @@ impl INode {
     }
 }
 
-// ─── Inode Table ─────────────────────────────────────────────────────
+//Inode Table
 
 /// Tabella degli inode: gestisce il mapping path - inode number livello di cash.
 struct InodeTable {
@@ -203,7 +203,7 @@ impl InodeTable {
     }
 }
 
-// ─── File Handle Table ───────────────────────────────────────────────
+//File Handle Table
 
 /// Gestisce i file handle aperti.
 struct FileHandleTable {
@@ -231,7 +231,7 @@ impl FileHandleTable {
     }
 }
 
-// ─── Path Lock Manager ──────────────────────────────────────────────
+// Path Lock Manager
 
 /// Gestisce lock per singolo path per serializzare operazioni mutanti
 /// solo quando insistono sullo stesso target logico.
@@ -255,12 +255,12 @@ impl PathLockManager {
     }
 }
 
-// ─── RemoteFS ────────────────────────────────────────────────────────
+//RemoteFS
 
 /// Filesystem remoto FUSE.
 ///
-/// Implementa il trait `Filesystem` di fuser, delegando le operazioni
-/// di rete all'`ApiClient` e usando il `CacheManager` per la cache locale.
+/// Implementa il trait Filesystem di fuser, delegando le operazioni
+/// di rete all'ApiClient e usando il CacheManager per la cache locale.
 pub struct RemoteFS {
     api_client: Arc<ApiClient>,
     inode_table: Arc<RwLock<InodeTable>>,
@@ -289,10 +289,9 @@ impl RemoteFS {
         self.inode_table.write().unwrap().invalidate_metadata(path);
     }
 
-    /// Monta il filesystem al mountpoint specificato.
-    ///
-    /// Salva un `SessionUnmounter` prima di
-    /// avviare il loop FUSE, così un signal handler può smontare il filesystem in modo pulito.
+    /// Monta il filesystem al mountpoint specificato,
+    /// Salva un SessionUnmounter prima di
+    /// avviare il loop FUSE, così un signal handler può smontare il filesystem.
     /// La funzione blocca finché la sessione FUSE non viene terminata.
     pub fn mount(
         self,
@@ -320,8 +319,7 @@ impl RemoteFS {
         let mut session = Session::new(self, mountpoint, &options)
             .map_err(|e| anyhow::anyhow!("Failed to create FUSE session: {}", e))?;
 
-        // Salva l'unmounter PRIMA di avviare il loop, così il signal handler
-        // può trovarlo immediatamente
+        // Salva l'unmounter prima di avviare il loop
         {
             let mut guard = unmounter_slot.lock().unwrap();
             *guard = Some(session.unmount_callable());
@@ -337,7 +335,7 @@ impl RemoteFS {
     }
 }
 
-// ─── Implementazione trait Filesystem ────────────────────────────────
+//Implementazione trait Filesystem
 
 impl Filesystem for RemoteFS {
     fn destroy(&mut self) {

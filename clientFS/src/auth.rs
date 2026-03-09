@@ -18,12 +18,12 @@ pub fn ask_password() -> String {
 
 /// Esegue l'autenticazione con il server e restituisce il token JWT.
 ///
-/// # Argomenti
-/// * `server_url` - URL base del server (es. "http://localhost:8080")
-/// * `password` - Password dell'utente
+/// Argomenti
+/// server_url - URL base del server
+/// password - Password dell'utente
 ///
-/// # Errori
-/// Ritorna errore se il server non è raggiungibile o la password è errata.
+/// Errori
+/// Ritorna errore se il server non è raggiungibile o la password è errata.*/
 pub async fn authenticate(server_url: &str, password: &str) -> Result<String> {
     let http_client = Client::new();
 

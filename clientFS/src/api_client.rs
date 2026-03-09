@@ -28,8 +28,8 @@ struct SetAttrsRequest {
 
 /// Client HTTP asincrono per comunicare con il server di storage.
 ///
-/// Utilizza `reqwest` async internamente, ma espone metodi sincroni
-/// tramite `block_on()` per compatibilità con il trait `Filesystem` di FUSE.
+/// Utilizza reqwest async internamente, ma espone metodi sincroni
+/// tramite block_on() per compatibilità con il trait Filesystem di FUSE.
 pub struct ApiClient {
     base_url: String,
     client: Client,
@@ -52,12 +52,13 @@ impl ApiClient {
         Ok(())
     }
 
-    /// Crea un nuovo client API.
+    /// Crea un client API.
     ///
-    /// # Argomenti
-    /// * `base_url` - URL base del server (es. "http://localhost:8080")
-    /// * `token` - Token JWT per l'autenticazione
-    /// * `runtime` - Handle al runtime Tokio per eseguire future async
+    /// Argomenti
+    ///
+    /// base_url - URL base del server
+    /// token - Token JWT per l'autenticazione
+    /// runtime - Handle al runtime Tokio per eseguire future async
     pub fn new(base_url: String, token: String, runtime: tokio::runtime::Handle) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(5))
@@ -73,7 +74,7 @@ impl ApiClient {
     }
 
     /// Esegue un future async bloccando il thread corrente.
-    /// Usa `block_in_place` per permettere l'uso anche dall'interno di un runtime Tokio.
+    /// Usa block_in_place per permettere l'uso anche dall'interno di un runtime Tokio.
     fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
         if tokio::runtime::Handle::try_current().is_ok() {
             tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
@@ -82,7 +83,7 @@ impl ApiClient {
         }
     }
 
-    // ── Operazioni sul filesystem ────────────────────────────────────
+    // Operazioni sul filesystem
 
     /// Elenca il contenuto di una directory.
     pub fn list_directory(&self, path: &str) -> Result<Vec<FileEntry>, ApiError> {
@@ -227,7 +228,7 @@ impl ApiClient {
         Err(ApiError::from_status(status, "write_file_chunk"))
     }
 
-    /// Fallback: legge tutto il file, modifica in memoria, riscrive tutto.
+    /// NOT USED: Fallback: legge tutto il file, modifica in memoria, riscrive tutto.
     fn write_file_chunk_fallback(&self, path: &str, offset: u64, data: &[u8]) -> Result<(), ApiError> {
         log::warn!("Using inefficient read-modify-write for {}", path);
 
@@ -318,7 +319,7 @@ impl ApiClient {
         Ok(())
     }
 
-    /// Imposta gli attributi (attualmente solo i permessi) di un file sul server.
+    /// Imposta gli attributi di un file sul server.
     pub fn set_attrs(&self, path: &str, mode: Option<u32>) -> Result<(), ApiError> {
         Self::validate_path(path, "set_attrs")?;
         let url = format!("{}/attrs/{}", self.base_url, path.trim_start_matches('/'));
